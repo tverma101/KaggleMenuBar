@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-run}"
+PRODUCT_NAME="KernelWatch"
+APP_NAME="Kaggle"
+APP_BUNDLE_NAME="Kaggle.app"
+BUNDLE_ID="app.kernelwatch.KernelWatch"
+MIN_SYSTEM_VERSION="14.0"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="$ROOT_DIR/dist"
+APP_BUNDLE="$DIST_DIR/$APP_BUNDLE_NAME"
+APP_CONTENTS="$APP_BUNDLE/Contents"
+APP_MACOS="$APP_CONTENTS/MacOS"
+APP_RESOURCES="$APP_CONTENTS/Resources"
+APP_BINARY="$APP_MACOS/$APP_NAME"
+INFO_PLIST="$APP_CONTENTS/Info.plist"
+INSTALL_BUNDLE="$HOME/Applications/$APP_BUNDLE_NAME"
+
+pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+
+swift build
+BUILD_BINARY="$(swift build --show-bin-path)/$PRODUCT_NAME"
+
+mkdir -p "$APP_MACOS" "$APP_RESOURCES"
+cp -f "$BUILD_BINARY" "$APP_BINARY"
+chmod +x "$APP_BINARY"
+cp -f "$ROOT_DIR/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
+
+cat >"$INFO_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key>
+  <string>$BUNDLE_ID</string>
+  <key>CFBundleName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>$MIN_SYSTEM_VERSION</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+</dict>
+</plist>
+PLIST
+
+open_app() {
+  /usr/bin/open -n "$APP_BUNDLE"
+}
+
+# Copies the app to ~/Applications so Spotlight, Launchpad and Finder find "Kaggle".
+install_app() {
+  mkdir -p "$HOME/Applications"
+  if [[ -e "$INSTALL_BUNDLE" ]]; then
+    /usr/bin/trash "$INSTALL_BUNDLE"
+  fi
+  /usr/bin/ditto "$APP_BUNDLE" "$INSTALL_BUNDLE"
+  /usr/bin/touch "$INSTALL_BUNDLE"
+  /usr/bin/open "$INSTALL_BUNDLE"
+  echo "Installed $INSTALL_BUNDLE"
+}
+
+case "$MODE" in
+  run)
+    open_app
+    ;;
+  --install|install)
+    install_app
+    ;;
+  --build-only|build-only)
+    echo "Built $APP_BUNDLE"
+    ;;
+  --debug|debug)
+    lldb -- "$APP_BINARY"
+    ;;
+  --logs|logs)
+    open_app
+    /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
+    ;;
+  --telemetry|telemetry)
+    open_app
+    /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
+    ;;
+  --verify|verify)
+    open_app
+    sleep 1
+    pgrep -x "$APP_NAME" >/dev/null
+    ;;
+  *)
+    echo "usage: $0 [run|--install|--build-only|--debug|--logs|--telemetry|--verify]" >&2
+    exit 2
+    ;;
+esac
