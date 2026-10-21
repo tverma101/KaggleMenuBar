@@ -30,9 +30,14 @@ enum NotebookRunStatus: String, CaseIterable, Hashable, Sendable, Decodable {
 }
 
 struct ActivitySnapshot: Sendable {
+    enum Source: String, Sendable {
+        case hub, direct
+    }
+
     let activeRuns: [NotebookRun]
     let notebooksChecked: Int
     var unavailableCount: Int = 0
+    var source: Source = .direct
 }
 
 /// Time since a run's `lastRunAt`, in whole minutes.

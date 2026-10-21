@@ -157,6 +157,10 @@ final class StatusItemController: NSObject {
             guard let self, self.isShown == shown else { return }
             let x = self.statusItem.button?.window?.frame.minX ?? -1
             self.logger.info("Status item shown=\(shown, privacy: .public), x=\(x, privacy: .public), active runs=\(self.store.activeRuns.count, privacy: .public)")
+            DiagnosticLog.shared.record("status_item", [
+                "shown": shown, "x": Double(x), "runs": self.store.activeRuns.count,
+                "error": self.store.errorMessage ?? "",
+            ])
         }
     }
 

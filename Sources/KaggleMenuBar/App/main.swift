@@ -20,10 +20,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = ProcessInfo.processInfo.environment
         // Screen-capture and UI-automation tools only list regular apps, so a
         // verification run can opt into a Dock icon. Normal launches stay menu-bar-only.
-        if environment["KERNEL_WATCH_DOCK"] == "1" {
+        if environment["KAGGLE_MENUBAR_DOCK"] == "1" {
             NSApp.setActivationPolicy(.regular)
         }
-        let store = environment["KERNEL_WATCH_DEMO"].map { NotebookStore(demo: $0) } ?? NotebookStore()
+        recordLaunch(environment)
+        let store = environment["KAGGLE_MENUBAR_DEMO"].map { NotebookStore(demo: $0) } ?? NotebookStore()
         self.store = store
         statusItemController = StatusItemController(store: store)
         // Posted by `kaggle-hub track` and hub submissions, so a notebook an
@@ -31,6 +32,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notify_register_dispatch("app.kernelwatch.KernelWatch.refresh", &refreshToken, .main) { [weak store] _ in
             MainActor.assumeIsolated { store?.refreshSoon() }
         }
+    }
+
+    /// The first thing to read in a diagnostic log: which build ran, on which
+    /// system, and which executables it would call.
+    private func recordLaunch(_ environment: [String: String]) {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let source = ActivitySource.configured()
+        var fields: [String: any Sendable] = [
+            "version": info["CFBundleShortVersionString"] as? String ?? "dev",
+            "build": info["CFBundleVersion"] as? String ?? "dev",
+            "macos": ProcessInfo.processInfo.operatingSystemVersionString,
+            "source": source.rawValue,
+            "hub": ActivitySource.installedHub()?.path ?? "none",
+            "kaggle": (try? KaggleCLI.kaggleExecutableURL().path) ?? "none",
+            "path": environment["PATH"] ?? "",
+            "time_zone": TimeZone.current.identifier,
+        ]
+        if let demo = environment["KAGGLE_MENUBAR_DEMO"] { fields["demo"] = demo }
+        DiagnosticLog.shared.record("launch", fields)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "KernelWatch",
+    name: "KaggleMenuBar",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "KernelWatch", targets: ["KernelWatch"])
+        .executable(name: "KaggleMenuBar", targets: ["KaggleMenuBar"])
     ],
     targets: [
         .executableTarget(
-            name: "KernelWatch",
-            path: "Sources/KernelWatch"
+            name: "KaggleMenuBar",
+            path: "Sources/KaggleMenuBar"
         ),
         .testTarget(
-            name: "KernelWatchTests",
-            dependencies: ["KernelWatch"]
+            name: "KaggleMenuBarTests",
+            dependencies: ["KaggleMenuBar"]
         )
     ],
     swiftLanguageModes: [.v5]

@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""Reference "kaggle-hub" for the KaggleMenuBar app (stdlib only, Python 3.11+).
+
+Commands:
+  kaggle-hub monitor-snapshot
+  kaggle-hub track REF [--project NAME]
+
+One shared state file and one request budget serve every local process that
+calls this executable. See README.md for the exact output contract.
+"""
+
+import argparse
+import ctypes
+import fcntl
+import json
+import math
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
+NOTIFICATION = b"app.kernelwatch.KernelWatch.refresh"
+NOT_INSTALLED = "The Kaggle CLI is not installed or is missing from PATH."
+
+CLI_TIMEOUT = 60
+RATE_LIMIT_COOLDOWN = 300
+MESSAGE_LIMIT = 300
+
+ACTIVE_WINDOW = 13 * 3600  # rule (a): listed run time within this long ago
+RECENT_WINDOW = 24 * 3600  # rule (c): "recent" means listed within this long ago
+RECENT_COUNT = 5  # rule (c): how many recent notebooks are considered
+RECHECK_AGE = 120  # rule (c): last check must be older than this
+TRACK_WINDOW = 3600  # rule (d): tracked within this long ago
+NEW_SCRIPT_WINDOW = 3600  # NEW_SCRIPT counts as queued within this long
+FIRST_SEEN_SKEW = 12 * 3600  # lastRunAt rule: listed time this far behind first-seen
+TRACK_RETENTION = 7 * 86400
+
+KNOWN_STATUSES = {
+    "QUEUED",
+    "RUNNING",
+    "COMPLETE",
+    "ERROR",
+    "CANCEL_REQUESTED",
+    "CANCEL_ACKNOWLEDGED",
+    "NEW_SCRIPT",
+}
+ACTIVE_STATUSES = {"QUEUED", "RUNNING"}
+RECHECK_STATUSES = {"QUEUED", "RUNNING", "UNKNOWN"}
+
+STATUS_RE = re.compile(r'has status\s+"(?:KernelWorkerStatus\.)?([A-Z_]+)"')
+EXCEPTION_RE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception)\b.*")
+UNAVAILABLE_RE = re.compile(r"\b(?:403|404)\b|cannot access kernel", re.IGNORECASE)
+REF_RE = re.compile(
+    r"^(?:https?://(?:www\.)?kaggle\.com/code/)?([\w.-]+)/([\w.-]+)/?$"
+)
+
+REDACTIONS = (
+    (re.compile(r"KGAT_[A-Za-z0-9_]+"), "[redacted]"),
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE), r"\1[redacted]"),
+    (
+        re.compile(
+            r"""([\w-]*(?:api[_-]?key|token|secret)[\w-]*["']?\s*[=:]\s*["']?)"""
+            r"""[^\s"',;]+""",
+            re.IGNORECASE,
+        ),
+        r"\1[redacted]",
+    ),
+)
+
+
+class HubError(Exception):
+    """A failure reported as one line on stderr with exit status 2."""
+
+
+# ----------------------------------------------------------------- helpers
+
+
+def redact(text):
+    for pattern, replacement in REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def clean_message(text):
+    """Redact secrets, fold to one line and cap the length."""
+    return " ".join(redact(str(text)).split())[:MESSAGE_LIMIT]
+
+
+def extract_error(output, returncode):
+    """Pick an error message from the END of CLI output, never the start."""
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if EXCEPTION_RE.match(line):
+            return clean_message(line)
+    # Traceback frames and their source lines are indented; carets mark columns.
+    for line in reversed(lines):
+        if line[0].isspace() or line.startswith("Traceback") or not line.strip("^~ "):
+            continue
+        return clean_message(line)
+    if any(line.startswith("Traceback") for line in lines):
+        return "The Kaggle CLI crashed without an error message."
+    return f"Kaggle CLI exited with status {returncode}."
+
+
+def rate_limit_message(seconds):
+    return f"Kaggle rate limit: retry in {max(1, math.ceil(seconds))} seconds."
+
+
+def normalize_ref(value):
+    match = REF_RE.match(value.strip()) if isinstance(value, str) else None
+    return f"{match.group(1)}/{match.group(2)}" if match else None
+
+
+def parse_time(value):
+    """Kaggle's listed time (naive means UTC) to epoch seconds, or None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.timestamp()
+
+
+def format_time(epoch):
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def run_start(listed, tracked_at, first_active):
+    """The lastRunAt rule. Returns epoch seconds or None."""
+    if tracked_at is not None and (listed is None or tracked_at > listed):
+        return tracked_at
+    if first_active is not None and (listed is None or first_active - listed > FIRST_SEEN_SKEW):
+        return first_active
+    return listed
+
+
+# ------------------------------------------------------------------- state
+
+
+def state_dir():
+    path = os.environ.get("KAGGLE_HUB_STATE_DIR") or os.path.expanduser(
+        "~/.local/state/kaggle-hub-template"
+    )
+    existed = os.path.isdir(path)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if not existed:
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+    return path
+
+
+def min_interval():
+    try:
+        return max(0.0, float(os.environ.get("KAGGLE_HUB_MIN_INTERVAL", "2.0")))
+    except ValueError:
+        return 2.0
+
+
+@contextmanager
+def locked(directory):
+    fd = os.open(os.path.join(directory, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
+
+
+def load_state(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    for key in ("notebooks", "tracked"):
+        if not isinstance(data.get(key), dict):
+            data[key] = {}
+    for key in ("retry_after", "last_cli_call"):
+        data[key] = number(data.get(key)) or 0.0
+    return data
+
+
+def save_state(directory, path, state):
+    """Write a temp file in the same directory, then replace atomically."""
+    fd, temp = tempfile.mkstemp(dir=directory, prefix=".state-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
+# --------------------------------------------------------------------- hub
+
+
+class Hub:
+    def __init__(self, directory, kaggle, interval):
+        self.directory = directory
+        self.path = os.path.join(directory, "state.json")
+        self.kaggle = kaggle
+        self.interval = interval
+        self.state = load_state(self.path)
+
+    def save(self):
+        save_state(self.directory, self.path, self.state)
+
+    # -- Kaggle CLI access (shared budget) --
+
+    def call_cli(self, *args):
+        """Run the CLI once. Returns (returncode, stdout, stdout+stderr)."""
+        wait = self.state["last_cli_call"] + self.interval - time.time()
+        if wait > 0:
+            time.sleep(min(wait, self.interval))
+        try:
+            proc = subprocess.run(
+                [self.kaggle, *args],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=CLI_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            raise HubError(f"Kaggle CLI timed out after {CLI_TIMEOUT} seconds.") from None
+        except FileNotFoundError:
+            raise HubError(NOT_INSTALLED) from None
+        except OSError as exc:
+            raise HubError(f"Could not run the Kaggle CLI: {exc.strerror or exc}") from None
+        finally:
+            self.state["last_cli_call"] = time.time()
+        out = proc.stdout or ""
+        combined = out + "\n" + (proc.stderr or "")
+        if proc.returncode != 0:
+            self.check_rate_limit(combined)
+        return proc.returncode, out, combined
+
+    def check_rate_limit(self, text):
+        lowered = text.lower()
+        if "429" in text and ("too many requests" in lowered or "rate limit" in lowered):
+            self.state["retry_after"] = time.time() + RATE_LIMIT_COOLDOWN
+            raise HubError(rate_limit_message(RATE_LIMIT_COOLDOWN))
+
+    def list_notebooks(self):
+        """Returns (usable rows, count of skipped rows)."""
+        returncode, out, combined = self.call_cli(
+            "kernels", "list", "--mine", "--sort-by", "dateRun",
+            "--page-size", "100", "--format", "json",
+        )
+        if returncode != 0:
+            if combined.strip().lower() == "not found":
+                return [], 0
+            raise HubError(extract_error(combined, returncode))
+        data = self.decode_list(out, combined)
+        rows, skipped, seen = [], 0, set()
+        for item in data:
+            ref = normalize_ref(item.get("ref")) if isinstance(item, dict) else None
+            if ref is None:
+                skipped += 1
+                continue
+            if ref in seen:
+                continue
+            seen.add(ref)
+            title = item.get("title")
+            raw = item.get("lastRunTime")
+            raw = raw if isinstance(raw, str) and raw.strip() else None
+            rows.append({
+                "ref": ref,
+                "title": title if isinstance(title, str) and title else ref.split("/")[1],
+                "listed_raw": raw,
+                "listed": parse_time(raw),
+            })
+        if data and not rows:
+            raise HubError("The Kaggle notebook list had no usable rows.")
+        return rows, skipped
+
+    def decode_list(self, out, combined):
+        end = out.rfind("]")
+        start = out.find("[")
+        attempts = 0
+        while start != -1 and start < end and attempts < 20:
+            try:
+                data = json.loads(out[start:end + 1])
+            except ValueError:
+                start = out.find("[", start + 1)
+                attempts += 1
+                continue
+            if isinstance(data, list):
+                return data
+            break
+        if start == -1 and (not out.strip() or "not found" in out.lower()):
+            return []
+        self.check_rate_limit(combined)
+        raise HubError("Could not read the Kaggle notebook list.")
+
+    def read_status(self, ref):
+        returncode, out, combined = self.call_cli("kernels", "status", ref)
+        if returncode != 0:
+            if UNAVAILABLE_RE.search(combined):
+                return "UNAVAILABLE"
+            raise HubError(extract_error(combined, returncode))
+        match = STATUS_RE.search(out) or STATUS_RE.search(combined)
+        if not match:
+            self.check_rate_limit(combined)
+            raise HubError(f"Could not read the Kaggle status of {ref}.")
+        status = match.group(1)
+        if status not in KNOWN_STATUSES:
+            raise HubError(f"Unrecognized Kaggle status {status} for {ref}.")
+        return status
+
+    # -- snapshot --
+
+    def snapshot(self):
+        now = time.time()
+        retry_after = self.state["retry_after"]
+        if retry_after > now:
+            raise HubError(rate_limit_message(retry_after - now))
+
+        rows, skipped = self.list_notebooks()
+        previous = self.state["notebooks"]
+        tracked = self.state["tracked"]
+
+        def tracked_at(ref):
+            entry = tracked.get(ref)
+            return number(entry.get("tracked_at")) if isinstance(entry, dict) else None
+
+        listed_refs = {row["ref"] for row in rows}
+        for ref in sorted(tracked):
+            stamp = tracked_at(ref)
+            if ref not in listed_refs and stamp is not None and now - stamp <= TRACK_WINDOW:
+                rows.append({"ref": ref, "title": ref.split("/")[1],
+                             "listed_raw": None, "listed": None})
+
+        recent = sorted(
+            (row for row in rows
+             if row["listed"] is not None and now - row["listed"] <= RECENT_WINDOW),
+            key=lambda row: -row["listed"],
+        )[:RECENT_COUNT]
+        recent_refs = {row["ref"] for row in recent}
+
+        def needs_check(row):
+            ref, listed = row["ref"], row["listed"]
+            before = previous.get(ref) if isinstance(previous.get(ref), dict) else None
+            status = before.get("status") if before else None
+            checked_at = number(before.get("checked_at")) if before else None
+            stamp = tracked_at(ref)
+            recently_run = listed is not None and now - listed <= ACTIVE_WINDOW
+            # A re-pushed notebook keeps its old listed run time, so an active
+            # one is re-checked however old that time is.
+            rule_a = status in RECHECK_STATUSES or (checked_at is None and recently_run)
+            rule_b = before is not None and before.get("listed") != row["listed_raw"]
+            rule_c = ref in recent_refs and (checked_at is None or now - checked_at > RECHECK_AGE)
+            rule_d = stamp is not None and now - stamp <= TRACK_WINDOW
+            return rule_a or rule_b or rule_c or rule_d
+
+        final = {}
+        for row in rows:
+            ref = row["ref"]
+            before = previous.get(ref) if isinstance(previous.get(ref), dict) else {}
+            first_active = number(before.get("first_active"))
+            if needs_check(row):
+                raw_status = self.read_status(ref)
+                status = self.map_status(raw_status, row["listed"], tracked_at(ref))
+                checked_at = time.time()
+            else:
+                # Not checked: anything that was active is assumed finished.
+                status = before.get("status") or "COMPLETE"
+                if status in ACTIVE_STATUSES:
+                    status = "COMPLETE"
+                checked_at = number(before.get("checked_at"))
+            if status in ACTIVE_STATUSES:
+                first_active = first_active if first_active is not None else time.time()
+            else:
+                first_active = None
+            entry = {
+                "status": status,
+                "checked_at": checked_at,
+                "listed": row["listed_raw"],
+                "first_active": first_active,
+            }
+            final[ref] = entry
+            previous[ref] = entry  # keep progress if a later call fails
+
+        self.state["notebooks"] = final
+        self.state["tracked"] = {
+            ref: value for ref, value in tracked.items()
+            if (tracked_at(ref) or 0) >= now - TRACK_RETENTION
+        }
+
+        active = []
+        for row in rows:
+            entry = final[row["ref"]]
+            if entry["status"] not in ACTIVE_STATUSES:
+                continue
+            start = run_start(row["listed"], tracked_at(row["ref"]), entry["first_active"])
+            meta = self.state["tracked"].get(row["ref"])
+            project = meta.get("project") if isinstance(meta, dict) else None
+            active.append((start if start is not None else now, {
+                "ref": row["ref"],
+                "title": row["title"],
+                "status": entry["status"],
+                "lastRunAt": format_time(start if start is not None else now),
+                "project": project if isinstance(project, str) else None,
+            }))
+        active.sort(key=lambda pair: (-pair[0], pair[1]["ref"]))
+
+        unavailable = sum(1 for entry in final.values() if entry["status"] == "UNAVAILABLE")
+        return {
+            "activeRuns": [run for _, run in active],
+            "notebooksChecked": len(rows),
+            "unavailableCount": unavailable + skipped,
+            "checkedAt": time.time(),
+        }
+
+    @staticmethod
+    def map_status(raw, listed, tracked_stamp):
+        if raw == "CANCEL_REQUESTED":
+            return "RUNNING"
+        if raw == "NEW_SCRIPT":
+            start = run_start(listed, tracked_stamp, None)
+            if start is not None and time.time() - start <= NEW_SCRIPT_WINDOW:
+                return "QUEUED"
+            return "NEW_SCRIPT"  # an inactive draft
+        return raw
+
+
+# ---------------------------------------------------------------- commands
+
+
+def find_kaggle():
+    path = os.environ.get("KAGGLE_CLI_PATH") or shutil.which("kaggle")
+    if not path:
+        raise HubError(NOT_INSTALLED)
+    return path
+
+
+def command_snapshot():
+    kaggle = find_kaggle()
+    directory = state_dir()
+    with locked(directory):
+        hub = Hub(directory, kaggle, min_interval())
+        try:
+            payload = hub.snapshot()
+        finally:
+            hub.save()
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
+def notify_app():
+    if sys.platform != "darwin" or os.environ.get("KAGGLE_HUB_NO_NOTIFY"):
+        return
+    try:
+        ctypes.CDLL(None).notify_post(NOTIFICATION)
+    except (OSError, AttributeError):
+        pass
+
+
+def command_track(ref_argument, project):
+    ref = normalize_ref(ref_argument)
+    if ref is None:
+        raise HubError(f"Invalid notebook reference: {ref_argument}")
+    directory = state_dir()
+    with locked(directory):
+        hub = Hub(directory, "", 0.0)
+        stamp = time.time()
+        hub.state["tracked"][ref] = {"tracked_at": stamp, "project": project}
+        hub.save()
+    notify_app()
+    sys.stdout.write(json.dumps({"ref": ref, "trackedAt": stamp}, separators=(",", ":")) + "\n")
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise HubError(message)
+
+
+def build_parser():
+    parser = Parser(prog="kaggle-hub", description="Shared Kaggle notebook status hub.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("monitor-snapshot", help="print active notebook runs as JSON")
+    track = commands.add_parser("track", help="record that a notebook was just pushed")
+    track.add_argument("ref", help="owner/slug or https://www.kaggle.com/code/owner/slug")
+    track.add_argument("--project", default=None, help="project name to attach")
+    return parser
+
+
+def main(argv=None):
+    try:
+        args = build_parser().parse_args(argv)
+        if args.command == "monitor-snapshot":
+            command_snapshot()
+        else:
+            command_track(args.ref, args.project)
+    except HubError as exc:
+        sys.stderr.write(f"kaggle-hub: {clean_message(exc)}\n")
+        return 2
+    except OSError as exc:
+        sys.stderr.write(f"kaggle-hub: {clean_message(exc.strerror or exc)}\n")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

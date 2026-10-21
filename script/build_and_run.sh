@@ -2,10 +2,13 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-PRODUCT_NAME="KernelWatch"
-APP_NAME="Kaggle"
-APP_BUNDLE_NAME="Kaggle.app"
+PRODUCT_NAME="KaggleMenuBar"
+APP_NAME="KaggleMenuBar"
+APP_BUNDLE_NAME="KaggleMenuBar.app"
+# Kept from the app's first name so the launch agent, Hidden Bar position and
+# kaggle-hub's refresh notification keep working across the rename.
 BUNDLE_ID="app.kernelwatch.KernelWatch"
+LEGACY_APP_NAME="Kaggle"
 MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,6 +23,8 @@ INSTALL_BUNDLE="/Applications/$APP_BUNDLE_NAME"
 AGENT_LABEL="$BUNDLE_ID"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 AGENT_DOMAIN="gui/$(id -u)"
+LEGACY_INSTALL_BUNDLE="/Applications/$LEGACY_APP_NAME.app"
+LEGACY_USER_LINK="$HOME/Applications/$LEGACY_APP_NAME.app"
 
 # Build before stopping anything: a failed build must leave monitoring running.
 swift build
@@ -48,9 +53,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.2.0</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>LSUIElement</key>
@@ -70,6 +75,7 @@ PLIST
 stop_app() {
   /bin/launchctl bootout "$AGENT_DOMAIN/$AGENT_LABEL" >/dev/null 2>&1 || true
   pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+  pkill -x "$LEGACY_APP_NAME" >/dev/null 2>&1 || true
 }
 
 open_app() {
@@ -122,6 +128,13 @@ install_app() {
   stop_app
   if [[ -e "$INSTALL_BUNDLE" ]]; then
     /usr/bin/trash "$INSTALL_BUNDLE"
+  fi
+  # Copies installed under the app's first name.
+  if [[ -e "$LEGACY_INSTALL_BUNDLE" ]]; then
+    /usr/bin/trash "$LEGACY_INSTALL_BUNDLE"
+  fi
+  if [[ -L "$LEGACY_USER_LINK" ]]; then
+    /usr/bin/trash "$LEGACY_USER_LINK"
   fi
   /usr/bin/ditto "$APP_BUNDLE" "$INSTALL_BUNDLE"
   /usr/bin/touch "$INSTALL_BUNDLE"

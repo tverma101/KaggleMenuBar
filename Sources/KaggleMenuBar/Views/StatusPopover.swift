@@ -41,7 +41,7 @@ struct StatusPopover: View {
             KaggleBadge()
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Kaggle")
+                Text("Kaggle notebooks")
                     .font(.system(size: 13, weight: .semibold))
                 Text(headerSubtitle)
                     .font(.system(size: 11))
@@ -161,10 +161,16 @@ struct StatusPopover: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Color(nsColor: KaggleStyle.yellow))
-            Text(message)
-                .foregroundStyle(.primary.opacity(0.85))
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(message)
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                CopyButton(title: "Copy details") {
+                    DiagnosticReport.failureDetails(store: store)
+                }
+            }
         }
         .font(.system(size: 11))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,15 +189,33 @@ struct StatusPopover: View {
             Text(footerStatus)
                 .monospacedDigit()
             Spacer()
+            diagnosticsMenu
             FooterButton(title: "Quit") { NSApp.terminate(nil) }
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
     }
 
+    private var diagnosticsMenu: some View {
+        Menu("Diagnostics") {
+            Button("Copy Diagnostics") {
+                DiagnosticReport.copy(DiagnosticReport.full(store: store))
+            }
+            Button("Show Log in Finder") {
+                DiagnosticLog.shared.ensureFileExists()
+                NSWorkspace.shared.activateFileViewerSelecting([DiagnosticLog.shared.fileURL])
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Copy a redacted report, or open the diagnostic log")
+    }
+
     private var footerStatus: String {
         if store.isRefreshing { return "Checking…" }
         if store.snapshotState == .failed { return "Last check failed" }
+        if store.failureStreak > 0 { return "Check failed · retrying" }
         if store.unavailableCount > 0 { return "\(store.notebooksChecked) checked · \(store.unavailableCount) unavailable" }
         if let lastUpdated = store.lastUpdated {
             return "Updated \(lastUpdated.formatted(date: .omitted, time: .shortened))"
@@ -234,6 +258,33 @@ private struct RefreshButton: View {
         .onHover { isHovered = $0 }
         .help("Check Kaggle now")
         .accessibilityLabel("Refresh")
+    }
+}
+
+/// Copies text made on click, then says so for a moment.
+private struct CopyButton: View {
+    let title: String
+    let text: () -> String
+
+    @State private var copied = false
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            DiagnosticReport.copy(text())
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 11, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isHovered ? .primary : .secondary)
+        .onHover { isHovered = $0 }
     }
 }
 
