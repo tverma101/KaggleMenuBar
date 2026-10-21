@@ -1,96 +1,100 @@
 import AppKit
 import CoreText
 
-/// One active run, drawn like a watch face. The arc is the minutes into the
-/// current hour, starting at 12 o'clock; the middle shows completed hours, or a
-/// dot during the first hour. A filled dot means running and a hollow one
-/// queued, so the two read apart without color. A running ring turns red from
-/// 11 hours, an hour before Kaggle stops a 12-hour session.
+/// One active run, drawn as the original app drew it: a muted status disc
+/// inside a pale ring, on the graphite capsule. The ring is also a 12-hour
+/// dial. It fills clockwise from 12 o'clock with the time the run has been
+/// going, so a full ring is Kaggle's 12-hour session limit, and a running disc
+/// turns brick red in the last hour. When the hub reports the run's hardware,
+/// the disc carries it: a chip for CPU, a card for GPU, four tiles for TPU.
 struct ClockRing: Equatable {
     enum Style: Equatable {
         case running, queued
-        /// A bare track: connecting, or the first check has not finished.
+        /// A hollow pale ring: connecting, or the first check has not finished.
         case checking
-        /// The stack's last slot when more runs are active than fit: a
-        /// neutral ring around "+N".
+        /// The stack's last slot when more runs are active than fit: a pale
+        /// disc around "+N".
         case more(Int)
+        /// A wheat disc with "!": the last check failed.
+        case warning
     }
 
     var style: Style
     /// Minutes since the run started or was queued, when Kaggle reported it.
     var minutes: Int?
+    var accelerator: Accelerator?
 
-    /// Menu bar size; the panel draws the same ring scaled up.
-    static let radius: CGFloat = 6.6
-    static let lineWidth: CGFloat = 1.8
-    static var outerRadius: CGFloat { radius + lineWidth / 2 }
-    /// Clear space a ring cuts out of the ring it overlaps.
-    static let cutoutRadius: CGFloat = 8.7
+    /// Menu bar size; the panel draws the same circle scaled up.
+    static let outerRadius: CGFloat = 8.5
+    static let lineWidth: CGFloat = 1.6
+    static var discRadius: CGFloat { outerRadius - lineWidth }
+    /// Capsule-colored space each circle keeps around itself, which parts it
+    /// from the circle it overlaps.
+    static let separation: CGFloat = 1.2
+    static let glyphSize: CGFloat = 9.6
+    static let dialMinutes = 12 * 60
     static let lateMinutes = 11 * 60
 
     var tint: NSColor {
         switch style {
         case .running: (minutes ?? 0) >= Self.lateMinutes ? KaggleStyle.late : KaggleStyle.running
         case .queued: KaggleStyle.queued
-        case .checking, .more: .secondaryLabelColor
+        case .warning: KaggleStyle.warning
+        case .checking, .more: KaggleStyle.ring
         }
     }
 
-    /// Draws in a y-up context. Colors resolve against the current drawing
-    /// appearance, so call it from `draw(_:)` or inside
-    /// `performAsCurrentDrawingAppearance`.
+    /// Draws in a y-up context over the graphite capsule.
     func draw(in context: CGContext, center: CGPoint, scale: CGFloat = 1) {
-        let radius = Self.radius * scale
-        let tint = tint
+        func circle(_ radius: CGFloat) -> CGRect {
+            CGRect(x: center.x - radius * scale, y: center.y - radius * scale, width: radius * 2 * scale, height: radius * 2 * scale)
+        }
         context.saveGState()
         defer { context.restoreGState() }
-        context.setLineWidth(Self.lineWidth * scale)
+        context.setFillColor(KaggleStyle.capsule.cgColor)
+        context.fillEllipse(in: circle(Self.outerRadius + Self.separation))
 
-        context.setStrokeColor((style == .checking ? tint : tint.withAlphaComponent(0.3)).cgColor)
-        context.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
-        context.strokePath()
+        let trackRadius = (Self.outerRadius - Self.lineWidth / 2) * scale
+        context.setLineWidth(Self.lineWidth * scale)
         switch style {
         case .checking:
-            return
+            context.setStrokeColor(KaggleStyle.ring.cgColor)
+            context.strokeEllipse(in: circle(Self.outerRadius - Self.lineWidth / 2))
         case let .more(count):
-            // The ring before it covers the chip's left edge, so the label
-            // sits a little right of center.
-            let label = "+\(count)"
-            let size: CGFloat = label.count < 3 ? 7 : 6
-            TextLine(label, font: .rounded(size * scale, weight: .bold), color: .labelColor)
-                .drawCenteredOnGlyphs(in: context, at: CGPoint(x: center.x + 1 * scale, y: center.y))
-            return
+            context.setFillColor(KaggleStyle.ring.cgColor)
+            context.fillEllipse(in: circle(Self.outerRadius))
+            // The circle before it covers the chip's left edge, so the count
+            // sits in the part that shows.
+            let font = NSFont.monospacedDigitSystemFont(ofSize: (count < 10 ? 8 : 6.5) * scale, weight: .heavy)
+            TextLine("+\(count)", font: font, color: KaggleStyle.ink)
+                .drawCenteredOnGlyphs(in: context, at: CGPoint(x: center.x + 2.5 * scale, y: center.y))
+        case .warning:
+            context.setFillColor(KaggleStyle.ring.cgColor)
+            context.fillEllipse(in: circle(Self.outerRadius))
+            context.setFillColor(tint.cgColor)
+            context.fillEllipse(in: circle(Self.discRadius))
+            TextLine("!", font: .systemFont(ofSize: 10 * scale, weight: .black), color: KaggleStyle.ink)
+                .drawCenteredOnGlyphs(in: context, at: center)
         case .running, .queued:
-            break
-        }
-
-        let minutes = max(0, minutes ?? 0)
-        let fraction = CGFloat(minutes % 60) / 60
-        if fraction > 0 {
-            context.setStrokeColor(tint.cgColor)
-            context.setLineCap(.round)
-            let top = CGFloat.pi / 2
-            context.addArc(center: center, radius: radius, startAngle: top,
-                           endAngle: top - fraction * 2 * .pi, clockwise: true)
+            context.setStrokeColor(KaggleStyle.ring.withAlphaComponent(0.3).cgColor)
+            context.addArc(center: center, radius: trackRadius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
             context.strokePath()
-        }
-
-        let hours = minutes / 60
-        if hours >= 1 {
-            let size: CGFloat = hours < 10 ? 8.6 : 7.2
-            let digits = TextLine("\(hours)", font: .rounded(size * scale, weight: .bold), color: .labelColor)
-            digits.drawCenteredOnGlyphs(in: context, at: center)
-        } else {
-            let dot = 2.6 * scale
-            let rect = CGRect(x: center.x - dot, y: center.y - dot, width: dot * 2, height: dot * 2)
-            if style == .running {
-                context.setFillColor(tint.cgColor)
-                context.fillEllipse(in: rect)
-            } else {
-                let line = 1.2 * scale
-                context.setStrokeColor(tint.cgColor)
-                context.setLineWidth(line)
-                context.strokeEllipse(in: rect.insetBy(dx: line / 2, dy: line / 2))
+            if let minutes {
+                // A run that has just started still shows a dot at 12 o'clock.
+                let fraction = min(1, CGFloat(max(0, minutes)) / CGFloat(Self.dialMinutes))
+                context.setStrokeColor(KaggleStyle.ring.cgColor)
+                context.setLineCap(.round)
+                let top = CGFloat.pi / 2
+                context.addArc(center: center, radius: trackRadius, startAngle: top,
+                               endAngle: top - fraction * 2 * .pi, clockwise: true)
+                context.strokePath()
+            }
+            context.setFillColor(tint.cgColor)
+            context.fillEllipse(in: circle(Self.discRadius))
+            if let accelerator {
+                context.addPath(AcceleratorGlyph.path(for: accelerator, center: center, size: Self.glyphSize * scale))
+                context.setFillColor(KaggleStyle.capsule.cgColor)
+                context.fillPath(using: .evenOdd)
             }
         }
     }
@@ -126,23 +130,5 @@ struct TextLine {
         context.textMatrix = .identity
         context.textPosition = CGPoint(x: center.x - bounds.midX, y: center.y - bounds.midY)
         CTLineDraw(line, context)
-    }
-
-    var glyphBounds: CGRect { CTLineGetBoundsWithOptions(line, .useGlyphPathBounds) }
-}
-
-extension NSFont {
-    /// SF Rounded, optionally with digits of equal width so ticking minutes
-    /// do not shift the text.
-    static func rounded(_ size: CGFloat, weight: NSFont.Weight, monospacedDigits: Bool = false) -> NSFont {
-        var descriptor = NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor
-        descriptor = descriptor.withDesign(.rounded) ?? descriptor
-        if monospacedDigits {
-            descriptor = descriptor.addingAttributes([.featureSettings: [[
-                NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
-                NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector,
-            ]]])
-        }
-        return NSFont(descriptor: descriptor, size: size) ?? .systemFont(ofSize: size, weight: weight)
     }
 }

@@ -6,8 +6,8 @@ struct PillModel: Equatable {
     enum Indicator: Equatable {
         /// `minutes` since the run started or was queued, when known. Whole
         /// minutes, so the model changes, and the item redraws, once a minute.
-        case run(ref: String, status: NotebookRunStatus, minutes: Int?)
-        /// A bare ring while connecting or before the first status check.
+        case run(ref: String, status: NotebookRunStatus, minutes: Int?, accelerator: Accelerator? = nil)
+        /// A hollow ring while connecting or before the first status check.
         case checking
     }
 
@@ -18,28 +18,30 @@ struct PillModel: Equatable {
     var elapsed: String?
 }
 
-/// Geometry of the item: [k] [rings, the last maybe "+N"] [time] [!], in a
-/// 22 pt lane.
+/// Geometry of the graphite capsule: [k] [circles, the last maybe "+N"] [!]
+/// [time]. It fills the 22 pt menu bar lane, as the original app's did.
 enum PillMetrics {
     static let height: CGFloat = 22
-    static let inset: CGFloat = 3
-    /// Width of a status item with only the k in it.
-    static let minimumWidth: CGFloat = 20
-    static let markGap: CGFloat = 3
-    /// Ring centers are this far apart, so neighbours overlap by 3 pt.
-    static let ringStep: CGFloat = 12
+    static let leadingInset: CGFloat = 7.5
+    static let markHeight: CGFloat = 11
+    static let markGap: CGFloat = 5
+    /// Circle centers are this far apart, so neighbours overlap by 4 pt.
+    static let ringStep: CGFloat = 13
     static let maxVisibleRings = 4
-    static let gap: CGFloat = 4
+    /// Space between the stack and the warning circle, which never overlaps.
+    static let warningGap: CGFloat = 2
+    static let timeGap: CGFloat = 5
+    static let timeTrailingInset: CGFloat = 8
     static let transitionDuration: CFTimeInterval = 0.22
 
-    static let markFont = NSFont.rounded(15, weight: .bold)
-    static let timeFont = NSFont.rounded(12, weight: .semibold, monospacedDigits: true)
+    static let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+    static var markWidth: CGFloat { KaggleMark.width(forHeight: markHeight) }
 }
 
 /// The status item's drawing. It sits on top of the `NSStatusBarButton`,
-/// passes every click through to it, and right-aligns its content so the
-/// content stays still while the status item's length changes around it.
-/// Colors follow the menu bar's appearance.
+/// passes every click through to it, and right-aligns the capsule so the
+/// capsule stays still while the status item's length changes around it. The
+/// capsule keeps its colors on light and dark menu bars.
 @MainActor
 final class StatusPillView: NSView {
     private var model = PillModel()
@@ -57,11 +59,6 @@ final class StatusPillView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override var acceptsFirstResponder: Bool { false }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
 
     static func width(for model: PillModel) -> CGFloat {
         Layout(model).width
@@ -85,101 +82,77 @@ final class StatusPillView: NSView {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         let layout = Layout(model)
         let midY = bounds.midY
-        context.translateBy(x: floor(bounds.width - layout.width), y: 0)
+        context.translateBy(x: floor(bounds.width - layout.width), y: floor(midY - PillMetrics.height / 2))
+        let center = PillMetrics.height / 2
 
-        let mark = TextLine("k", font: PillMetrics.markFont, color: .labelColor)
-        let markBounds = mark.glyphBounds
-        mark.drawCenteredOnGlyphs(in: context, at: CGPoint(x: layout.markX + markBounds.width / 2, y: midY))
+        context.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: layout.width, height: PillMetrics.height),
+                               cornerWidth: center, cornerHeight: center, transform: nil))
+        context.setFillColor(KaggleStyle.capsule.cgColor)
+        context.fillPath()
+        context.addPath(KaggleMark.path(in: CGRect(
+            x: PillMetrics.leadingInset, y: (PillMetrics.height - PillMetrics.markHeight) / 2,
+            width: PillMetrics.markWidth, height: PillMetrics.markHeight)))
+        context.setFillColor(KaggleStyle.onCapsule.cgColor)
+        context.fillPath()
 
-        drawRings(layout.rings, in: context, midY: midY)
-
+        // The first circle sits on top, so each one hides the left of the
+        // next and every dial shows from 12 o'clock round.
+        for (ring, x) in layout.rings.reversed() {
+            ring.draw(in: context, center: CGPoint(x: x, y: center))
+        }
         if let x = layout.timeX, let elapsed = model.elapsed {
-            TextLine(elapsed, font: PillMetrics.timeFont, color: .labelColor)
-                .draw(in: context, x: x, midY: midY)
+            TextLine(elapsed, font: PillMetrics.timeFont, color: KaggleStyle.onCapsule)
+                .draw(in: context, x: x, midY: center)
         }
-        if let x = layout.warningCenterX {
-            drawWarning(in: context, center: CGPoint(x: x, y: midY))
-        }
-    }
-
-    /// The first ring sits on top. Each ring clears a slightly larger circle
-    /// out of the ring beneath it, inside a transparency layer so the clearing
-    /// never reaches the menu bar behind the item.
-    private func drawRings(_ rings: [(ring: ClockRing, centerX: CGFloat)], in context: CGContext, midY: CGFloat) {
-        guard !rings.isEmpty else { return }
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        for (ring, x) in rings.reversed() {
-            let center = CGPoint(x: x, y: midY)
-            context.saveGState()
-            context.setBlendMode(.clear)
-            let cutout = ClockRing.cutoutRadius
-            context.fillEllipse(in: CGRect(x: center.x - cutout, y: center.y - cutout, width: cutout * 2, height: cutout * 2))
-            context.restoreGState()
-            ring.draw(in: context, center: center)
-        }
-        context.endTransparencyLayer()
-    }
-
-    private func drawWarning(in context: CGContext, center: CGPoint) {
-        let radius = ClockRing.outerRadius
-        context.setFillColor(KaggleStyle.warning.cgColor)
-        context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-        TextLine("!", font: .rounded(11, weight: .heavy), color: .black.withAlphaComponent(0.85))
-            .drawCenteredOnGlyphs(in: context, at: center)
     }
 
     /// One pass that both sizes the item and places its contents, so the
     /// status item length and the drawing can never disagree.
     private struct Layout {
-        var markX: CGFloat = PillMetrics.inset
         var rings: [(ring: ClockRing, centerX: CGFloat)] = []
         var timeX: CGFloat?
-        var warningCenterX: CGFloat?
-        var width: CGFloat = PillMetrics.minimumWidth
+        var width: CGFloat
 
         init(_ model: PillModel) {
-            let markWidth = TextLine("k", font: PillMetrics.markFont, color: .labelColor).glyphBounds.width
-            var x = PillMetrics.inset + markWidth
-
             var stack: [ClockRing] = model.indicators.map { indicator in
                 switch indicator {
-                case let .run(_, status, minutes):
-                    ClockRing(style: status == .running ? .running : .queued, minutes: minutes)
+                case let .run(_, status, minutes, accelerator):
+                    ClockRing(style: status == .running ? .running : .queued, minutes: minutes, accelerator: accelerator)
                 case .checking:
-                    ClockRing(style: .checking, minutes: nil)
+                    ClockRing(style: .checking)
                 }
             }
             if model.overflowCount > 0 {
-                stack.append(ClockRing(style: .more(model.overflowCount), minutes: nil))
+                stack.append(ClockRing(style: .more(model.overflowCount)))
             }
-            if !stack.isEmpty {
-                x += PillMetrics.markGap
-                var centerX = x + ClockRing.outerRadius
-                for ring in stack {
-                    rings.append((ring, centerX))
-                    centerX += PillMetrics.ringStep
-                }
-                x = centerX - PillMetrics.ringStep + ClockRing.outerRadius
-            }
-            if let elapsed = model.elapsed, !model.indicators.isEmpty {
-                x += PillMetrics.gap
-                timeX = x
-                x += TextLine(elapsed, font: PillMetrics.timeFont, color: .labelColor).width
+
+            // Whole-point start for the first circle keeps 1x displays crisp.
+            var centerX = ceil(PillMetrics.leadingInset + PillMetrics.markWidth + PillMetrics.markGap) + ClockRing.outerRadius
+            for ring in stack {
+                rings.append((ring, centerX))
+                centerX += PillMetrics.ringStep
             }
             if model.showsWarning {
-                x += PillMetrics.gap
-                warningCenterX = x + ClockRing.outerRadius
-                x += ClockRing.outerRadius * 2
+                if !stack.isEmpty {
+                    centerX += 2 * ClockRing.outerRadius + PillMetrics.warningGap - PillMetrics.ringStep
+                }
+                rings.append((ClockRing(style: .warning), centerX))
             }
-            x += PillMetrics.inset
 
-            // A lone k is centered in a small square-ish item.
-            let lead = max(0, (PillMetrics.minimumWidth - x) / 2)
-            markX += lead
-            rings = rings.map { ($0.ring, $0.centerX + lead) }
-            timeX = timeX.map { $0 + lead }
-            warningCenterX = warningCenterX.map { $0 + lead }
-            width = ceil(max(PillMetrics.minimumWidth, x))
+            guard let last = rings.last?.centerX else {
+                // A lone k becomes a 22 pt circle.
+                width = max(PillMetrics.height, ceil(2 * PillMetrics.leadingInset + PillMetrics.markWidth))
+                return
+            }
+            if let elapsed = model.elapsed, !model.indicators.isEmpty {
+                let x = last + ClockRing.outerRadius + PillMetrics.timeGap
+                timeX = x
+                width = ceil(x + TextLine(elapsed, font: PillMetrics.timeFont, color: KaggleStyle.onCapsule).width
+                    + PillMetrics.timeTrailingInset)
+            } else {
+                // The last circle is concentric with the capsule's end cap.
+                width = ceil(last + PillMetrics.height / 2)
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 
 Commands:
   kaggle-hub monitor-snapshot
-  kaggle-hub track REF [--project NAME]
+  kaggle-hub track REF [--project NAME] [--accelerator NAME]
 
 One shared state file and one request budget serve every local process that
 calls this executable. See README.md for the exact output contract.
@@ -135,6 +135,18 @@ def format_time(epoch):
 
 def number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def normalize_accelerator(value):
+    """CPU, GPU or TPU from those names or a Kaggle machine shape."""
+    name = value.strip().lower()
+    if name == "cpu":
+        return "CPU"
+    if name == "gpu" or name.startswith("nvidia"):
+        return "GPU"
+    if name.startswith("tpu"):
+        return "TPU"
+    return None
 
 
 def run_start(listed, tracked_at, first_active):
@@ -416,13 +428,16 @@ class Hub:
                 continue
             start = run_start(row["listed"], tracked_at(row["ref"]), entry["first_active"])
             meta = self.state["tracked"].get(row["ref"])
-            project = meta.get("project") if isinstance(meta, dict) else None
+            meta = meta if isinstance(meta, dict) else {}
+            project = meta.get("project")
+            accelerator = meta.get("accelerator")
             active.append((start if start is not None else now, {
                 "ref": row["ref"],
                 "title": row["title"],
                 "status": entry["status"],
                 "lastRunAt": format_time(start if start is not None else now),
                 "project": project if isinstance(project, str) else None,
+                "accelerator": accelerator if accelerator in ("CPU", "GPU", "TPU") else None,
             }))
         active.sort(key=lambda pair: (-pair[0], pair[1]["ref"]))
 
@@ -477,15 +492,21 @@ def notify_app():
         pass
 
 
-def command_track(ref_argument, project):
+def command_track(ref_argument, project, accelerator_argument=None):
     ref = normalize_ref(ref_argument)
     if ref is None:
         raise HubError(f"Invalid notebook reference: {ref_argument}")
+    accelerator = None
+    if accelerator_argument is not None:
+        accelerator = normalize_accelerator(accelerator_argument)
+        if accelerator is None:
+            raise HubError(f"Unknown accelerator: {accelerator_argument}. "
+                           "Use CPU, GPU, TPU or a Kaggle machine shape such as NvidiaTeslaT4.")
     directory = state_dir()
     with locked(directory):
         hub = Hub(directory, "", 0.0)
         stamp = time.time()
-        hub.state["tracked"][ref] = {"tracked_at": stamp, "project": project}
+        hub.state["tracked"][ref] = {"tracked_at": stamp, "project": project, "accelerator": accelerator}
         hub.save()
     notify_app()
     sys.stdout.write(json.dumps({"ref": ref, "trackedAt": stamp}, separators=(",", ":")) + "\n")
@@ -503,6 +524,8 @@ def build_parser():
     track = commands.add_parser("track", help="record that a notebook was just pushed")
     track.add_argument("ref", help="owner/slug or https://www.kaggle.com/code/owner/slug")
     track.add_argument("--project", default=None, help="project name to attach")
+    track.add_argument("--accelerator", default=None,
+                       help="CPU, GPU, TPU or the Kaggle machine shape the run uses")
     return parser
 
 
@@ -512,7 +535,7 @@ def main(argv=None):
         if args.command == "monitor-snapshot":
             command_snapshot()
         else:
-            command_track(args.ref, args.project)
+            command_track(args.ref, args.project, args.accelerator)
     except HubError as exc:
         sys.stderr.write(f"kaggle-hub: {clean_message(exc)}\n")
         return 2

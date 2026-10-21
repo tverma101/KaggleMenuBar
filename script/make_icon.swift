@@ -75,7 +75,7 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
     CTLineDraw(line, ctx)
 
     // Running in front, queued behind; the front ring cuts a gap out of the
-    // one behind it, as ClockRing's cutoutRadius does in the menu bar.
+    // one behind it, as ClockRing's separation does in the menu bar.
     let front = CGPoint(x: 604, y: 292)
     let back = CGPoint(x: 754, y: 292)
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)

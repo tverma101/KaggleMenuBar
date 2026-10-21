@@ -3,6 +3,8 @@ import SwiftUI
 struct NotebookRow: View {
     let run: NotebookRun
     let now: Date
+    /// The user filtered this run's hardware out of the menu bar.
+    var hiddenFromMenuBar = false
     let onOpen: (URL) -> Void
 
     @State private var isHovered = false
@@ -28,6 +30,10 @@ struct NotebookRow: View {
                         }
                         Text(run.status.label)
                             .foregroundStyle(Color(nsColor: KaggleStyle.textColor(for: run.status)))
+                        if let accelerator = run.accelerator {
+                            Text("·").foregroundStyle(.tertiary)
+                            Text(accelerator.label).foregroundStyle(.secondary)
+                        }
                         if let elapsed {
                             Text("·").foregroundStyle(.tertiary)
                             Text(elapsed).foregroundStyle(.secondary)
@@ -38,6 +44,13 @@ struct NotebookRow: View {
                 }
 
                 Spacer(minLength: 6)
+
+                if hiddenFromMenuBar {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .help("\(run.accelerator?.label ?? "These") runs are hidden from the menu bar")
+                }
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 10, weight: .semibold))
@@ -59,8 +72,16 @@ struct NotebookRow: View {
         }
         .help(lastRunHelp)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(run.title), \(run.status.label)\(elapsed.map { ", \($0)" } ?? "")")
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityHint("Opens the notebook on Kaggle")
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [run.title, run.status.label]
+        if let accelerator = run.accelerator { parts.append(accelerator.label) }
+        if let elapsed { parts.append(elapsed) }
+        if hiddenFromMenuBar { parts.append("hidden from the menu bar") }
+        return parts.joined(separator: ", ")
     }
 
     /// Time since Kaggle's last run timestamp, e.g. "47m" or "2h 14m".

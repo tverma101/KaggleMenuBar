@@ -7,6 +7,8 @@ struct NotebookRun: Identifiable, Hashable, Sendable {
     /// Kaggle's `lastRunTime` for the notebook, when the CLI reports one.
     var lastRunAt: Date? = nil
     var project: String? = nil
+    /// Only kaggle-hub reports it; Kaggle's notebook list does not.
+    var accelerator: Accelerator? = nil
 
     var id: String { ref }
 
@@ -27,6 +29,32 @@ enum NotebookRunStatus: String, CaseIterable, Hashable, Sendable, Decodable {
         case .running: "Running"
         }
     }
+}
+
+/// The hardware a run's session uses.
+enum Accelerator: String, CaseIterable, Hashable, Sendable {
+    case cpu = "CPU"
+    case gpu = "GPU"
+    case tpu = "TPU"
+
+    /// Reads kaggle-hub's `CPU`, `GPU` or `TPU`, or a Kaggle machine shape
+    /// such as `NvidiaTeslaT4` or `TpuV6E8`. Anything else is unknown.
+    init?(kaggleName: String?) {
+        guard let name = kaggleName?.trimmingCharacters(in: .whitespaces).lowercased(), !name.isEmpty else {
+            return nil
+        }
+        if name == "cpu" {
+            self = .cpu
+        } else if name.hasPrefix("tpu") {
+            self = .tpu
+        } else if name == "gpu" || name.hasPrefix("nvidia") {
+            self = .gpu
+        } else {
+            return nil
+        }
+    }
+
+    var label: String { rawValue }
 }
 
 struct ActivitySnapshot: Sendable {

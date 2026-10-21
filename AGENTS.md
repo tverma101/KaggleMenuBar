@@ -19,7 +19,8 @@ it too: it holds machine-specific paths and is not committed.
 - Idle collapses the item to zero width; never set `isVisible = false`, which
   loses its menu bar position. Idle and active are also announced to Hidden
   Bar (`StatusItemController.announcePresence`); keep both.
-- Hide only after a successful idle snapshot. Setup, incomplete checks and
+- Hide only after a successful snapshot with nothing to show: no active runs,
+  or only runs on hardware the user filtered out. Setup, incomplete checks and
   errors stay reachable. Reopening the app must open the panel while idle.
 - A failed check must not show an endless first-check spinner or claim idle.
   Transient failures are retried quietly once before an error shows.
