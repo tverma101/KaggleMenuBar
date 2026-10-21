@@ -38,7 +38,7 @@ struct StatusPopover: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            KaggleBadge()
+            BrandBadge()
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Kaggle notebooks")
@@ -160,7 +160,7 @@ struct StatusPopover: View {
     private func errorNotice(_ message: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color(nsColor: KaggleStyle.yellow))
+                .foregroundStyle(Color(nsColor: KaggleStyle.warning))
             VStack(alignment: .leading, spacing: 5) {
                 Text(message)
                     .foregroundStyle(.primary.opacity(0.85))
@@ -178,7 +178,7 @@ struct StatusPopover: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: KaggleStyle.yellow).opacity(0.14))
+                .fill(Color(nsColor: KaggleStyle.warning).opacity(0.14))
         )
     }
 

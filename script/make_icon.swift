@@ -1,26 +1,20 @@
-// Draws Resources/AppIcon.icns using the menu bar's graphite, sage and amber.
+// Draws Resources/AppIcon.icns: the app's mark (a rounded "k" inside a clock
+// ring three quarters of the way round, as BrandMark in
+// Sources/KaggleMenuBar/Design/KaggleStyle.swift draws it) on a graphite body.
 // Run from the repo root: swift script/make_icon.swift
 import AppKit
+import CoreText
 
 let surface = NSColor(srgbRed: 0x30 / 255, green: 0x37 / 255, blue: 0x33 / 255, alpha: 1)
-let surfaceDeep = NSColor(srgbRed: 0x23 / 255, green: 0x2A / 255, blue: 0x26 / 255, alpha: 1)
-let foreground = NSColor(srgbRed: 0xEF / 255, green: 0xF1 / 255, blue: 0xEA / 255, alpha: 1)
-let ringColor = NSColor(srgbRed: 0xDA / 255, green: 0xE0 / 255, blue: 0xD5 / 255, alpha: 1)
-let green = NSColor(srgbRed: 0x78 / 255, green: 0x97 / 255, blue: 0x60 / 255, alpha: 1)
-let orange = NSColor(srgbRed: 0xBC / 255, green: 0x92 / 255, blue: 0x58 / 255, alpha: 1)
+let surfaceDeep = NSColor(srgbRed: 0x1F / 255, green: 0x24 / 255, blue: 0x21 / 255, alpha: 1)
+let foreground = NSColor(srgbRed: 0xF4 / 255, green: 0xF6 / 255, blue: 0xF1 / 255, alpha: 1)
+// systemGreen as macOS draws it on dark backgrounds.
+let green = NSColor(srgbRed: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255, alpha: 1)
 
-// Same outline as KaggleMark in Sources/KernelWatch/Design/KaggleStyle.swift (SVG units, y down).
-let markSize = CGSize(width: 26.92, height: 47.27)
-let markPoints: [CGPoint] = [
-    CGPoint(x: 26.92, y: 47.00), CGPoint(x: 26.36, y: 47.27), CGPoint(x: 20.19, y: 47.27),
-    CGPoint(x: 19.19, y: 46.79), CGPoint(x: 9.00, y: 33.78), CGPoint(x: 6.17, y: 36.49),
-    CGPoint(x: 6.17, y: 46.55), CGPoint(x: 5.48, y: 47.24), CGPoint(x: 0.69, y: 47.24),
-    CGPoint(x: 0.00, y: 46.55), CGPoint(x: 0.00, y: 0.69), CGPoint(x: 0.69, y: 0.00),
-    CGPoint(x: 5.48, y: 0.00), CGPoint(x: 6.17, y: 0.69), CGPoint(x: 6.17, y: 28.93),
-    CGPoint(x: 18.38, y: 16.58), CGPoint(x: 19.38, y: 16.09), CGPoint(x: 25.77, y: 16.09),
-    CGPoint(x: 26.32, y: 16.44), CGPoint(x: 26.25, y: 17.07), CGPoint(x: 13.32, y: 29.55),
-    CGPoint(x: 26.78, y: 46.27),
-]
+func roundedBold(_ size: CGFloat) -> NSFont {
+    let base = NSFont.systemFont(ofSize: size, weight: .bold)
+    return NSFont(descriptor: base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor, size: size) ?? base
+}
 
 func drawIcon(pixels: Int) -> NSBitmapImageRep {
     let rep = NSBitmapImageRep(
@@ -43,48 +37,40 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
     ctx.restoreGState()
     NSGradient(starting: surface, ending: surfaceDeep)!.draw(in: shape, angle: -90)
 
-    // White k, optically centred a little left to leave room for the circles.
-    let markHeight: CGFloat = 450
-    let scale = markHeight / markSize.height
-    let markRect = CGRect(x: 248, y: 287, width: markSize.width * scale, height: markHeight)
-    let mark = CGMutablePath()
-    for (index, point) in markPoints.enumerated() {
-        let p = CGPoint(x: markRect.minX + point.x * scale, y: markRect.maxY - point.y * scale)
-        index == 0 ? mark.move(to: p) : mark.addLine(to: p)
-    }
-    mark.closeSubpath()
-    ctx.addPath(mark)
-    ctx.setFillColor(foreground.cgColor)
-    ctx.fillPath()
+    // The ring: a faint full track, then the green arc from 12 o'clock.
+    let center = CGPoint(x: 512, y: 512)
+    let lineWidth: CGFloat = 64
+    let radius: CGFloat = 268
+    ctx.setLineWidth(lineWidth)
+    ctx.setStrokeColor(foreground.withAlphaComponent(0.16).cgColor)
+    ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+    ctx.strokePath()
+    ctx.setStrokeColor(green.cgColor)
+    ctx.setLineCap(.round)
+    ctx.addArc(center: center, radius: radius, startAngle: .pi / 2, endAngle: .pi / 2 - 1.5 * .pi, clockwise: true)
+    ctx.strokePath()
 
-    // Two overlapping status circles with pale rings, as in the menu bar.
-    let diameter: CGFloat = 176
-    let ring: CGFloat = 20
-    for (index, color) in [orange, green].enumerated() {
-        let x = 548 + CGFloat(index) * 112
-        let disc = CGRect(x: x, y: 190, width: diameter, height: diameter)
-        ctx.setFillColor(ringColor.cgColor)
-        ctx.fillEllipse(in: disc)
-        ctx.setFillColor(color.cgColor)
-        ctx.fillEllipse(in: disc.insetBy(dx: ring, dy: ring))
-    }
+    // The k, centered on its own ink.
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: roundedBold(370),
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): foreground.cgColor,
+    ]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: "k", attributes: attributes))
+    let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+    ctx.textMatrix = .identity
+    ctx.textPosition = CGPoint(x: center.x + 6 - ink.midX, y: center.y - ink.midY)
+    CTLineDraw(line, ctx)
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
 }
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let iconset = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".codex/tmp/kaggle-icon/AppIcon.iconset")
+let iconset = FileManager.default.temporaryDirectory
+    .appendingPathComponent("KaggleMenuBar-icon/AppIcon.iconset")
 func trashIconset() throws {
     guard FileManager.default.fileExists(atPath: iconset.path) else { return }
-    let trash = Process()
-    trash.executableURL = URL(fileURLWithPath: "/usr/bin/trash")
-    trash.arguments = [iconset.path]
-    try trash.run()
-    trash.waitUntilExit()
-    guard trash.terminationStatus == 0 else { exit(trash.terminationStatus) }
-    print("Moved temporary iconset to Trash: \(iconset.path)")
+    try FileManager.default.trashItem(at: iconset, resultingItemURL: nil)
 }
 try trashIconset()
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)

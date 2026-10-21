@@ -12,7 +12,7 @@ struct NotebookRow: View {
             if let url = run.kaggleURL { onOpen(url) }
         } label: {
             HStack(spacing: 10) {
-                RunDot(status: run.status)
+                RunRing(run: run, now: now)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(run.title)

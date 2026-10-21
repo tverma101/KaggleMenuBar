@@ -42,15 +42,16 @@ struct ActivitySnapshot: Sendable {
 
 /// Time since a run's `lastRunAt`, in whole minutes.
 enum ElapsedTime {
-    /// Menu bar form: "now", "47m", "1h12m", "11h".
+    /// Menu bar form: "now", "47m", "2h05", "11h". Minutes after an hour
+    /// always take two digits, like a clock.
     static func compact(since start: Date, now: Date) -> String {
         let minutes = wholeMinutes(since: start, now: now)
         if minutes < 1 { return "now" }
         if minutes < 60 { return "\(minutes)m" }
         let hours = minutes / 60
         let remainder = minutes % 60
-        if hours >= 10 || remainder == 0 { return "\(hours)h" }
-        return "\(hours)h\(remainder)m"
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h" + (remainder < 10 ? "0\(remainder)" : "\(remainder)")
     }
 
     /// Panel form: "just now", "47m", "2h 14m".
