@@ -1,33 +1,67 @@
 import Combine
 import Foundation
+import OSLog
 
 @MainActor
 final class NotebookStore: ObservableObject {
+    private let logger = Logger(subsystem: "app.kernelwatch.KernelWatch", category: "Polling")
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
         case connected
     }
 
+    enum SnapshotState: Equatable {
+        case checking, active, idle, failed
+    }
+
+    var snapshotState: SnapshotState {
+        if errorMessage != nil { return .failed }
+        if lastUpdated == nil { return .checking }
+        return activeRuns.isEmpty ? .idle : .active
+    }
+
     @Published private(set) var connectionState: ConnectionState
     @Published private(set) var activeRuns: [NotebookRun] = []
     @Published private(set) var notebooksChecked = 0
+    @Published private(set) var unavailableCount = 0
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
-    @Published private(set) var isStatusItemVisible = true
+    @Published private(set) var retryAfter: Date?
+
+    /// Keep setup/checking/errors reachable; a confirmed idle account stays quiet.
+    /// Derive this from the snapshot so visibility cannot drift from the run list.
+    var isStatusItemVisible: Bool {
+        connectionState != .connected
+            || lastUpdated == nil
+            || errorMessage != nil
+            || !activeRuns.isEmpty
+    }
 
     private static let connectedPreference = "hasConnectedToKaggle"
-    private let cli = KaggleCLI()
+    /// The hub refreshes its newest notebook page once a minute, so a poll at
+    /// the same pace shows a new agent run within about a minute.
+    static let pollInterval: Duration = .seconds(60)
+    private let cli: any KaggleActivityProviding
+    private let defaults: UserDefaults
+    private let now: () -> Date
     private var pollingTask: Task<Void, Never>?
+    private var refreshRequested = false
 
     private let isDemo: Bool
 
-    init() {
+    init(cli: any KaggleActivityProviding = KaggleCLI(),
+         defaults: UserDefaults = .standard,
+         now: @escaping () -> Date = Date.init,
+         startPolling: Bool = true) {
+        self.cli = cli
+        self.defaults = defaults
+        self.now = now
         isDemo = false
-        let wasConnected = UserDefaults.standard.bool(forKey: Self.connectedPreference)
+        let wasConnected = defaults.bool(forKey: Self.connectedPreference)
         connectionState = wasConnected ? .connected : .disconnected
-        if wasConnected {
+        if wasConnected && startPolling {
             beginPolling()
         }
     }
@@ -43,6 +77,9 @@ final class NotebookStore: ObservableObject {
     /// Fixed sample state for screenshots and layout checks; never calls Kaggle.
     /// Selected with `KERNEL_WATCH_DEMO=<scenario>` at launch.
     init(demo scenario: String) {
+        cli = KaggleCLI()
+        defaults = .standard
+        self.now = Date.init
         isDemo = true
         let now = Date()
         func run(_ slug: String, _ status: NotebookRunStatus, minutesAgo: Double) -> NotebookRun {
@@ -96,7 +133,6 @@ final class NotebookStore: ObservableObject {
                     try? await Task.sleep(for: .seconds(8))
                     guard let self else { return }
                     self.activeRuns = self.activeRuns.isEmpty ? busy : []
-                    self.isStatusItemVisible = !self.activeRuns.isEmpty
                 }
             }
         default:
@@ -107,7 +143,6 @@ final class NotebookStore: ObservableObject {
             ]
         }
         notebooksChecked = 24
-        isStatusItemVisible = true
     }
 
     func connect() {
@@ -119,7 +154,7 @@ final class NotebookStore: ObservableObject {
         Task {
             do {
                 try await cli.signIn()
-                UserDefaults.standard.set(true, forKey: Self.connectedPreference)
+                defaults.set(true, forKey: Self.connectedPreference)
                 connectionState = .connected
                 beginPolling()
             } catch {
@@ -129,11 +164,23 @@ final class NotebookStore: ObservableObject {
         }
     }
 
-    func refresh() {
+    func refresh() async {
         guard !isDemo, connectionState == .connected else { return }
-        Task {
-            await performRefresh()
+        await performRefresh()
+    }
+
+    /// `kaggle-hub track` signals this after an agent registers a submission.
+    /// Check now instead of waiting for the next poll; a check already in
+    /// flight is followed by one more so it cannot miss the new notebook.
+    func refreshSoon() {
+        guard !isDemo, connectionState == .connected else { return }
+        if isRefreshing {
+            refreshRequested = true
+            return
         }
+        pollingTask?.cancel()
+        pollingTask = nil
+        beginPolling()
     }
 
     private func beginPolling() {
@@ -141,34 +188,42 @@ final class NotebookStore: ObservableObject {
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.performRefresh()
-                try? await Task.sleep(for: .seconds(120))
+                try? await Task.sleep(for: Self.pollInterval)
             }
         }
     }
 
     private func performRefresh() async {
         guard connectionState == .connected, !isRefreshing else { return }
+        guard retryAfter.map({ $0 <= now() }) ?? true else { return }
+        retryAfter = nil
         isRefreshing = true
-        errorMessage = nil
-        defer { isRefreshing = false }
+        defer {
+            isRefreshing = false
+            if refreshRequested {
+                refreshRequested = false
+                refreshSoon()
+            }
+        }
 
         do {
             let snapshot = try await cli.activitySnapshot()
             activeRuns = snapshot.activeRuns
             notebooksChecked = snapshot.notebooksChecked
-            lastUpdated = Date()
+            unavailableCount = snapshot.unavailableCount
+            lastUpdated = now()
             errorMessage = nil
-            updateMenuBarVisibility()
+            logger.info("Snapshot checked=\(self.notebooksChecked, privacy: .public), running=\(self.runningCount, privacy: .public), queued=\(self.queuedCount, privacy: .public)")
         } catch {
             errorMessage = error.localizedDescription
-            isStatusItemVisible = true
+            if case KaggleCLIError.rateLimited = error {
+                retryAfter = now().addingTimeInterval(5 * 60)
+            }
+            logger.error("Notebook snapshot check failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func updateMenuBarVisibility() {
-        isStatusItemVisible = connectionState != .connected
-            || lastUpdated == nil
-            || errorMessage != nil
-            || !activeRuns.isEmpty
+    deinit {
+        pollingTask?.cancel()
     }
 }

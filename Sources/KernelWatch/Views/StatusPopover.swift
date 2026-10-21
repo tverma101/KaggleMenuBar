@@ -52,7 +52,9 @@ struct StatusPopover: View {
             Spacer(minLength: 8)
 
             if store.connectionState == .connected {
-                RefreshButton(isRefreshing: store.isRefreshing) { store.refresh() }
+                RefreshButton(isRefreshing: store.isRefreshing, retryAfter: store.retryAfter) {
+                    Task { await store.refresh() }
+                }
             }
         }
     }
@@ -64,8 +66,9 @@ struct StatusPopover: View {
         case .connecting:
             return "Connecting…"
         case .connected:
+            if store.snapshotState == .failed { return "Status check failed" }
             if store.activeRuns.isEmpty {
-                return store.lastUpdated == nil ? "Checking notebooks…" : "Nothing running"
+                return store.snapshotState == .checking ? "Checking notebooks…" : "Nothing running"
             }
             var parts: [String] = []
             if store.runningCount > 0 { parts.append("\(store.runningCount) running") }
@@ -86,7 +89,9 @@ struct StatusPopover: View {
         case .connected:
             if !store.activeRuns.isEmpty {
                 runList
-            } else if store.lastUpdated == nil {
+            } else if store.snapshotState == .failed {
+                message(progress: false, "Notebook status is unavailable. Use Refresh to try again.")
+            } else if store.snapshotState == .checking {
                 message(progress: true, "Checking your latest notebook runs…")
             } else {
                 message(progress: false, "The menu bar item hides until a notebook is queued or running.")
@@ -126,7 +131,7 @@ struct StatusPopover: View {
                         .padding(.horizontal, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Color(nsColor: KaggleStyle.blue))
+                .tint(Color(nsColor: KaggleStyle.accent))
                 .controlSize(.regular)
 
                 Link("CLI setup", destination: URL(string: "https://github.com/Kaggle/kaggle-cli#installation")!)
@@ -186,6 +191,8 @@ struct StatusPopover: View {
 
     private var footerStatus: String {
         if store.isRefreshing { return "Checking…" }
+        if store.snapshotState == .failed { return "Last check failed" }
+        if store.unavailableCount > 0 { return "\(store.notebooksChecked) checked · \(store.unavailableCount) unavailable" }
         if let lastUpdated = store.lastUpdated {
             return "Updated \(lastUpdated.formatted(date: .omitted, time: .shortened))"
         }
@@ -202,6 +209,7 @@ struct StatusPopover: View {
 
 private struct RefreshButton: View {
     let isRefreshing: Bool
+    let retryAfter: Date?
     let action: () -> Void
 
     @State private var isHovered = false
@@ -222,7 +230,7 @@ private struct RefreshButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .disabled(isRefreshing)
+        .disabled(isRefreshing || (retryAfter.map { $0 > Date() } ?? false))
         .onHover { isHovered = $0 }
         .help("Check Kaggle now")
         .accessibilityLabel("Refresh")

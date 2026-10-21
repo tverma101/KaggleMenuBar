@@ -1,31 +1,35 @@
 import AppKit
 import SwiftUI
 
-/// Kaggle brand colors, taken from the `km.color.kaggle` theme in kaggle.com's
-/// app bundle (blue #20BEFF, green #1CCD76, orange #FF5C19, yellow #E5CF4A).
-/// The darker text shades come from the same bundle's status palette and keep
-/// labels readable on light backgrounds.
+/// Muted colors inspired by Kaggle's neutral rebrand and updated green palette.
+/// Graphite replaces the legacy bright cyan; sage, amber and wheat retain the
+/// running, queued and warning meanings on the 22 pt menu bar surface.
 enum KaggleStyle {
-    static let blue = NSColor(srgbRed: 0x20 / 255, green: 0xBE / 255, blue: 0xFF / 255, alpha: 1)
-    static let green = NSColor(srgbRed: 0x1C / 255, green: 0xCD / 255, blue: 0x76 / 255, alpha: 1)
-    static let orange = NSColor(srgbRed: 0xFF / 255, green: 0x5C / 255, blue: 0x19 / 255, alpha: 1)
-    static let yellow = NSColor(srgbRed: 0xE5 / 255, green: 0xCF / 255, blue: 0x4A / 255, alpha: 1)
+    static let capsule = NSColor(srgbRed: 0x30 / 255, green: 0x37 / 255, blue: 0x33 / 255, alpha: 1)
+    static let onCapsule = NSColor(srgbRed: 0xEF / 255, green: 0xF1 / 255, blue: 0xEA / 255, alpha: 1)
+    static let ring = NSColor(srgbRed: 0xDA / 255, green: 0xE0 / 255, blue: 0xD5 / 255, alpha: 1)
+    static let green = NSColor(srgbRed: 0x78 / 255, green: 0x97 / 255, blue: 0x60 / 255, alpha: 1)
+    static let orange = NSColor(srgbRed: 0xBC / 255, green: 0x92 / 255, blue: 0x58 / 255, alpha: 1)
+    static let yellow = NSColor(srgbRed: 0xC4 / 255, green: 0xB1 / 255, blue: 0x6B / 255, alpha: 1)
+    static let accent = adaptive(
+        light: NSColor(srgbRed: 0x48 / 255, green: 0x6E / 255, blue: 0x35 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 0xA5 / 255, green: 0xBC / 255, blue: 0x91 / 255, alpha: 1)
+    )
 
     static let greenText = adaptive(
-        light: NSColor(srgbRed: 0x19 / 255, green: 0x76 / 255, blue: 0x31 / 255, alpha: 1),
-        dark: green
+        light: NSColor(srgbRed: 0x3E / 255, green: 0x64 / 255, blue: 0x2A / 255, alpha: 1),
+        dark: NSColor(srgbRed: 0xA5 / 255, green: 0xBC / 255, blue: 0x91 / 255, alpha: 1)
     )
     static let orangeText = adaptive(
-        light: NSColor(srgbRed: 0xCC / 255, green: 0x45 / 255, blue: 0x0D / 255, alpha: 1),
-        dark: NSColor(srgbRed: 0xFF / 255, green: 0x71 / 255, blue: 0x36 / 255, alpha: 1)
+        light: NSColor(srgbRed: 0x82 / 255, green: 0x5C / 255, blue: 0x2F / 255, alpha: 1),
+        dark: NSColor(srgbRed: 0xC9 / 255, green: 0xAB / 255, blue: 0x7A / 255, alpha: 1)
     )
     static let yellowText = adaptive(
-        light: NSColor(srgbRed: 0xB5 / 255, green: 0x88 / 255, blue: 0x12 / 255, alpha: 1),
-        dark: yellow
+        light: NSColor(srgbRed: 0x7A / 255, green: 0x68 / 255, blue: 0x32 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 0xCF / 255, green: 0xBD / 255, blue: 0x80 / 255, alpha: 1)
     )
 
-    /// Kaggle's text color (#202124). White on #20BEFF is too faint for small
-    /// text, so text on the blue pill uses this instead.
+    /// Dark glyphs remain readable inside the pale overflow and warning discs.
     static let ink = NSColor(srgbRed: 0x20 / 255, green: 0x21 / 255, blue: 0x24 / 255, alpha: 1)
 
     static func statusColor(for status: NotebookRunStatus) -> NSColor {

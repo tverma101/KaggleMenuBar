@@ -16,7 +16,7 @@ struct PillModel: Equatable {
     var elapsed: String?
 }
 
-/// Geometry for the Kaggle-blue capsule. It fills the 22 pt status bar lane, and
+/// Geometry for the graphite capsule. It fills the 22 pt status bar lane, and
 /// the circles overlap by about a third of their width, the usual proportion
 /// for avatar stacks.
 enum PillMetrics {
@@ -25,7 +25,7 @@ enum PillMetrics {
     static let markHeight: CGFloat = 11
     static let markGap: CGFloat = 5
     static let dotDiameter: CGFloat = 13
-    /// White ring that keeps each circle apart from the one it overlaps.
+    /// Pale ring that keeps each circle apart from the one it overlaps.
     static let dotRing: CGFloat = 1.5
     static let dotOverlap: CGFloat = 4.5
     static let timeGap: CGFloat = 5
@@ -80,13 +80,13 @@ final class StatusPillView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        capsule.backgroundColor = KaggleStyle.blue.cgColor
+        capsule.backgroundColor = KaggleStyle.capsule.cgColor
         capsule.cornerRadius = PillMetrics.height / 2
         capsule.cornerCurve = .circular
         capsule.masksToBounds = false
         layer?.addSublayer(capsule)
 
-        mark.fillColor = NSColor.white.cgColor
+        mark.fillColor = KaggleStyle.onCapsule.cgColor
         mark.path = KaggleMark.path(
             in: CGRect(x: 0, y: 0, width: PillMetrics.markWidth, height: PillMetrics.markHeight),
             flipped: false
@@ -140,7 +140,7 @@ final class StatusPillView: NSView {
                 dot.configure(style)
                 place(dot, animated: animate, frame: slot.frame, depth: slot.depth)
             case let .time(text):
-                let label = element(slot.key) { PillText.makeLayer(color: KaggleStyle.ink) } as! CATextLayer
+                let label = element(slot.key) { PillText.makeLayer(color: KaggleStyle.onCapsule) } as! CATextLayer
                 label.string = text
                 place(label, animated: animate, frame: slot.frame, depth: slot.depth)
             }
@@ -187,8 +187,14 @@ final class StatusPillView: NSView {
         var slots: [Slot] = []
         let origin = PillMetrics.contentOriginX
         let outer = PillMetrics.dotDiameter + 2 * PillMetrics.dotRing
+        var centerX = origin + PillMetrics.dotDiameter / 2
         for (index, dot) in dots.enumerated() {
-            let centerX = origin + PillMetrics.dotDiameter / 2 + CGFloat(index) * PillMetrics.dotStep
+            if index > 0 {
+                // Status discs can overlap, but a neighbour must never cover
+                // part of an overflow count or warning glyph.
+                let separate = dot.style.containsText || dots[index - 1].style.containsText
+                centerX += separate ? outer + 2 : PillMetrics.dotStep
+            }
             slots.append(Slot(
                 key: dot.key,
                 content: .dot(dot.style),
@@ -197,7 +203,7 @@ final class StatusPillView: NSView {
             ))
         }
 
-        let stackEnd = origin + PillMetrics.dotDiameter + CGFloat(max(dots.count - 1, 0)) * PillMetrics.dotStep
+        let stackEnd = centerX + PillMetrics.dotDiameter / 2
         let width: CGFloat
         if dots.isEmpty {
             // A lone mark becomes a 22 pt circle.
@@ -279,14 +285,21 @@ final class StatusPillView: NSView {
     }
 }
 
-/// One circle in the stack: a Kaggle-colored disc inside a white ring, which
-/// keeps overlapping circles apart on the blue capsule. Green while running,
-/// orange while queued, yellow with "!" when a check failed, white with the
+/// One circle in the stack: a muted status disc inside a pale ring, which
+/// keeps overlapping circles apart on the graphite capsule. Sage while running,
+/// amber while queued, wheat with "!" when a check failed, pale with the
 /// count of runs that did not fit.
 final class DotLayer: CALayer {
     enum Style: Equatable {
         case running, queued, checking, warning
         case overflow(Int)
+
+        var containsText: Bool {
+            switch self {
+            case .warning, .overflow: true
+            default: false
+            }
+        }
     }
 
     private let ring = CALayer()
@@ -296,7 +309,7 @@ final class DotLayer: CALayer {
 
     override init() {
         super.init()
-        ring.borderColor = NSColor.white.cgColor
+        ring.borderColor = KaggleStyle.ring.cgColor
         addSublayer(ring)
         addSublayer(disc)
         addSublayer(glyph)
@@ -312,7 +325,7 @@ final class DotLayer: CALayer {
     }
 
     func configure(_ style: Style) {
-        var ringFill: NSColor? = .white
+        var ringFill: NSColor? = KaggleStyle.ring
         var discFill: NSColor = .clear
         var text = ""
         var font = PillText.font
@@ -328,7 +341,7 @@ final class DotLayer: CALayer {
             text = "!"
             font = .systemFont(ofSize: 9.5, weight: .black)
         case let .overflow(count):
-            discFill = .white
+            discFill = KaggleStyle.ring
             text = "+\(count)"
             font = .monospacedDigitSystemFont(ofSize: count < 10 ? 8 : 6.5, weight: .heavy)
         }

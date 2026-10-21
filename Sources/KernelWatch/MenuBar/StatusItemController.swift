@@ -1,11 +1,13 @@
 import AppKit
 import Combine
+import OSLog
 import SwiftUI
 
 /// Owns the status item: keeps the pill in sync with the store, shows or hides
 /// the item automatically, and toggles the panel on click.
 @MainActor
 final class StatusItemController: NSObject {
+    private let logger = Logger(subsystem: "app.kernelwatch.KernelWatch", category: "MenuBar")
     private let store: NotebookStore
     private let statusItem: NSStatusItem
     private let pillView = StatusPillView(frame: .zero)
@@ -20,19 +22,23 @@ final class StatusItemController: NSObject {
 
     private var subscription: AnyCancellable?
     private var renderedModel: PillModel?
+    /// Whether the pill is showing. Idle collapses the item rather than
+    /// removing it; see `setItemShown`.
+    private var isShown = true
     private var shrinkGeneration = 0
     /// Ticks the elapsed-time labels while a run with a start time is shown.
     private var clock: Timer?
 
     init(store: NotebookStore) {
         self.store = store
-        // A launch after quitting while hidden finds the position gone.
-        ItemPosition.restore()
         statusItem = NSStatusBar.system.statusItem(withLength: PillMetrics.height)
         super.init()
 
-        statusItem.autosaveName = ItemPosition.autosaveName
+        // The autosave name is how macOS remembers where the user put the item.
+        statusItem.autosaveName = "KernelWatchStatusItem"
         statusItem.behavior = []
+        // Builds that hid the item with `isVisible` left it saved as hidden.
+        statusItem.isVisible = true
         if let button = statusItem.button {
             button.image = nil
             button.title = ""
@@ -50,6 +56,25 @@ final class StatusItemController: NSObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.render() }
         render()
+
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(hiddenBarAskedForPresence(_:)),
+            name: HiddenBarPresence.request, object: nil, suspensionBehavior: .deliverImmediately)
+        announcePresence()
+    }
+
+    @objc private func hiddenBarAskedForPresence(_ notification: Notification) {
+        announcePresence()
+    }
+
+    /// Tells Hidden Bar whether the item has anything to show. While its icons
+    /// are hidden, Hidden Bar hides an idle item the way it hides its hidden
+    /// section, which leaves no gap and keeps the item's place.
+    private func announcePresence() {
+        guard let bundle = Bundle.main.bundleIdentifier else { return }
+        DistributedNotificationCenter.default().postNotificationName(
+            isShown ? HiddenBarPresence.active : HiddenBarPresence.idle,
+            object: bundle, userInfo: nil, deliverImmediately: true)
     }
 
     @objc private func togglePanel(_ sender: Any?) {
@@ -57,35 +82,48 @@ final class StatusItemController: NSObject {
             panel.dismiss()
             return
         }
-        guard let button = statusItem.button, let window = button.window else { return }
-        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-        button.highlight(true)
+        showPanel()
+    }
+
+    /// Reopening Kaggle from Spotlight/Finder also works while its item is hidden.
+    func showPanel() {
+        let anchor: NSRect
+        if isShown, let button = statusItem.button, let window = button.window {
+            anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            button.highlight(true)
+        } else {
+            let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+            guard let screen else { return }
+            let visible = screen.visibleFrame
+            anchor = NSRect(x: visible.maxX - StatusPopover.width - 12,
+                            y: visible.maxY + 5, width: StatusPopover.width, height: 0)
+        }
         panel.open(below: anchor)
+        logger.info("Opened status panel; item shown=\(self.isShown, privacy: .public)")
     }
 
     private func render() {
         let now = Date()
         let model = Self.pillModel(for: store, now: now)
-        let isVisible = store.isStatusItemVisible
+        let target = StatusPillView.width(for: model)
         updateAccessibility(now: now)
-        setItemVisible(isVisible)
+        setItemShown(store.isStatusItemVisible, width: target)
         updateClock()
         guard model != renderedModel else { return }
 
         // The status item grows before the pill animates and shrinks only once
         // the pill has finished, so the capsule never clips or jumps. Changing
         // `length` every frame would make neighbouring items jitter.
-        let animated = renderedModel != nil && isVisible
-        let target = StatusPillView.width(for: model)
+        let animated = renderedModel != nil && isShown
         shrinkGeneration += 1
-        if target >= statusItem.length || !animated {
+        if isShown, target >= statusItem.length || !animated {
             statusItem.length = target
             syncPillFrame()
         }
         pillView.apply(model, animated: animated)
         renderedModel = model
 
-        if target < statusItem.length {
+        if isShown, target < statusItem.length {
             let generation = shrinkGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + PillMetrics.transitionDuration) { [weak self] in
                 guard let self, self.shrinkGeneration == generation else { return }
@@ -95,24 +133,35 @@ final class StatusItemController: NSObject {
         }
     }
 
-    /// Hiding a status item makes macOS forget where the user dragged it, and a
-    /// returning item lands at the far left, which is the hidden side of menu
-    /// bar managers like Hidden Bar. The position is saved before hiding and
-    /// written back before the item returns.
-    private func setItemVisible(_ visible: Bool) {
-        guard statusItem.isVisible != visible else { return }
-        if visible {
-            ItemPosition.restore()
-            statusItem.isVisible = true
+    /// Idle collapses the item to zero width instead of setting `isVisible`.
+    /// macOS 27 keeps an app's menu bar position only while its item exists: a
+    /// removed item, or one the app quit with, returns at the far left, which is
+    /// the hidden side of menu bar managers like Hidden Bar. A zero-width item
+    /// still leaves a gap of about 10 pt, so Hidden Bar is also told to hide it.
+    private func setItemShown(_ shown: Bool, width: CGFloat) {
+        guard shown != isShown else { return }
+        isShown = shown
+        // A pending shrink must not reopen a collapsed item.
+        shrinkGeneration += 1
+        if shown {
+            statusItem.length = width
+            pillView.isHidden = false
+            syncPillFrame()
         } else {
-            ItemPosition.remember()
             panel.dismiss()
-            statusItem.isVisible = false
+            pillView.isHidden = true
+            statusItem.length = 0
+        }
+        announcePresence()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.isShown == shown else { return }
+            let x = self.statusItem.button?.window?.frame.minX ?? -1
+            self.logger.info("Status item shown=\(shown, privacy: .public), x=\(x, privacy: .public), active runs=\(self.store.activeRuns.count, privacy: .public)")
         }
     }
 
     private func updateClock() {
-        let needsClock = statusItem.isVisible && store.activeRuns.contains { $0.lastRunAt != nil }
+        let needsClock = isShown && store.activeRuns.contains { $0.lastRunAt != nil }
         if needsClock, clock == nil {
             // Labels change once a minute; a 15 s tick keeps them within a few
             // seconds without waking the app more than it needs to.
@@ -158,7 +207,7 @@ final class StatusItemController: NSObject {
             // The longest-running notebook, or the longest wait when none has started.
             let timed = (running.isEmpty ? queued : running).compactMap(\.lastRunAt)
             model.elapsed = timed.min().map { ElapsedTime.compact(since: $0, now: now) }
-            if runs.isEmpty, store.lastUpdated == nil, store.errorMessage == nil {
+            if runs.isEmpty, store.snapshotState == .checking {
                 model.indicators = [.checking]
             }
         }
@@ -175,8 +224,10 @@ final class StatusItemController: NSObject {
         case .connecting:
             summary = "Kaggle: connecting"
         case .connected:
-            if store.activeRuns.isEmpty {
-                summary = store.lastUpdated == nil ? "Kaggle: checking notebooks" : "Kaggle: nothing running"
+            if store.snapshotState == .failed {
+                summary = "Kaggle: status check failed"
+            } else if store.activeRuns.isEmpty {
+                summary = store.snapshotState == .checking ? "Kaggle: checking notebooks" : "Kaggle: nothing running"
             } else {
                 summary = "Kaggle: \(store.runningCount) running, \(store.queuedCount) queued"
             }
@@ -194,25 +245,11 @@ final class StatusItemController: NSObject {
     }
 }
 
-/// The status item's saved place in the menu bar. AppKit keeps it under
-/// "NSStatusItem Preferred Position <autosave name>" and deletes it whenever the
-/// item is hidden, so a copy is kept under a key AppKit leaves alone.
-enum ItemPosition {
-    static let autosaveName = "KernelWatchStatusItem"
-    private static let systemKey = "NSStatusItem Preferred Position \(autosaveName)"
-    private static let savedKey = "savedStatusItemPosition"
-
-    static func remember() {
-        let defaults = UserDefaults.standard
-        guard let position = defaults.object(forKey: systemKey) as? Double else { return }
-        defaults.set(position, forKey: savedKey)
-    }
-
-    static func restore() {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: systemKey) == nil,
-              let position = defaults.object(forKey: savedKey) as? Double
-        else { return }
-        defaults.set(position, forKey: systemKey)
-    }
+/// Hidden Bar's notifications for apps whose status items go idle. The object
+/// is the sender's bundle identifier.
+private enum HiddenBarPresence {
+    static let idle = Notification.Name("com.dwarvesv.minimalbar.statusItemsIdle")
+    static let active = Notification.Name("com.dwarvesv.minimalbar.statusItemsActive")
+    /// Posted when Hidden Bar starts.
+    static let request = Notification.Name("com.dwarvesv.minimalbar.statusItemsPresenceRequest")
 }

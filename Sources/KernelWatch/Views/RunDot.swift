@@ -14,16 +14,16 @@ struct RunDot: View {
     }
 }
 
-/// Kaggle-blue disc with a white "k", the same mark the menu bar pill starts with.
+/// Graphite disc with a soft white "k", the same mark the menu bar pill starts with.
 struct KaggleBadge: View {
     var size: CGFloat = 26
 
     var body: some View {
         Circle()
-            .fill(Color(nsColor: KaggleStyle.blue))
+            .fill(Color(nsColor: KaggleStyle.capsule))
             .overlay {
                 KaggleMarkShape()
-                    .fill(.white)
+                    .fill(Color(nsColor: KaggleStyle.onCapsule))
                     .frame(
                         width: KaggleMark.width(forHeight: size * 0.5),
                         height: size * 0.5

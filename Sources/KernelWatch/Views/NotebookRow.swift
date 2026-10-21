@@ -22,6 +22,10 @@ struct NotebookRow: View {
                         .foregroundStyle(.primary)
 
                     HStack(spacing: 4) {
+                        if let project = run.project, project != "Unassigned" {
+                            Text(project).foregroundStyle(.secondary).lineLimit(1)
+                            Text("·").foregroundStyle(.tertiary)
+                        }
                         Text(run.status.label)
                             .foregroundStyle(Color(nsColor: KaggleStyle.textColor(for: run.status)))
                         if let elapsed {

@@ -6,6 +6,7 @@ struct NotebookRun: Identifiable, Hashable, Sendable {
     let status: NotebookRunStatus
     /// Kaggle's `lastRunTime` for the notebook, when the CLI reports one.
     var lastRunAt: Date? = nil
+    var project: String? = nil
 
     var id: String { ref }
 
@@ -16,7 +17,7 @@ struct NotebookRun: Identifiable, Hashable, Sendable {
     }
 }
 
-enum NotebookRunStatus: String, CaseIterable, Hashable, Sendable {
+enum NotebookRunStatus: String, CaseIterable, Hashable, Sendable, Decodable {
     case queued = "QUEUED"
     case running = "RUNNING"
 
@@ -31,6 +32,7 @@ enum NotebookRunStatus: String, CaseIterable, Hashable, Sendable {
 struct ActivitySnapshot: Sendable {
     let activeRuns: [NotebookRun]
     let notebooksChecked: Int
+    var unavailableCount: Int = 0
 }
 
 /// Time since a run's `lastRunAt`, in whole minutes.

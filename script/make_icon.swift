@@ -1,12 +1,13 @@
-// Draws Resources/AppIcon.icns: Kaggle's white k on a Kaggle-blue rounded
-// square, with the menu bar's green and orange status circles.
+// Draws Resources/AppIcon.icns using the menu bar's graphite, sage and amber.
 // Run from the repo root: swift script/make_icon.swift
 import AppKit
 
-let blue = NSColor(srgbRed: 0x20 / 255, green: 0xBE / 255, blue: 0xFF / 255, alpha: 1)
-let blueDeep = NSColor(srgbRed: 0x0F / 255, green: 0xA6 / 255, blue: 0xE8 / 255, alpha: 1)
-let green = NSColor(srgbRed: 0x1C / 255, green: 0xCD / 255, blue: 0x76 / 255, alpha: 1)
-let orange = NSColor(srgbRed: 0xFF / 255, green: 0x5C / 255, blue: 0x19 / 255, alpha: 1)
+let surface = NSColor(srgbRed: 0x30 / 255, green: 0x37 / 255, blue: 0x33 / 255, alpha: 1)
+let surfaceDeep = NSColor(srgbRed: 0x23 / 255, green: 0x2A / 255, blue: 0x26 / 255, alpha: 1)
+let foreground = NSColor(srgbRed: 0xEF / 255, green: 0xF1 / 255, blue: 0xEA / 255, alpha: 1)
+let ringColor = NSColor(srgbRed: 0xDA / 255, green: 0xE0 / 255, blue: 0xD5 / 255, alpha: 1)
+let green = NSColor(srgbRed: 0x78 / 255, green: 0x97 / 255, blue: 0x60 / 255, alpha: 1)
+let orange = NSColor(srgbRed: 0xBC / 255, green: 0x92 / 255, blue: 0x58 / 255, alpha: 1)
 
 // Same outline as KaggleMark in Sources/KernelWatch/Design/KaggleStyle.swift (SVG units, y down).
 let markSize = CGSize(width: 26.92, height: 47.27)
@@ -37,10 +38,10 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 24,
                   color: NSColor.black.withAlphaComponent(0.28).cgColor)
-    blue.setFill()
+    surface.setFill()
     shape.fill()
     ctx.restoreGState()
-    NSGradient(starting: blue, ending: blueDeep)!.draw(in: shape, angle: -90)
+    NSGradient(starting: surface, ending: surfaceDeep)!.draw(in: shape, angle: -90)
 
     // White k, optically centred a little left to leave room for the circles.
     let markHeight: CGFloat = 450
@@ -53,16 +54,16 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
     }
     mark.closeSubpath()
     ctx.addPath(mark)
-    ctx.setFillColor(NSColor.white.cgColor)
+    ctx.setFillColor(foreground.cgColor)
     ctx.fillPath()
 
-    // Two overlapping status circles with white rings, as in the menu bar.
+    // Two overlapping status circles with pale rings, as in the menu bar.
     let diameter: CGFloat = 176
     let ring: CGFloat = 20
     for (index, color) in [orange, green].enumerated() {
         let x = 548 + CGFloat(index) * 112
         let disc = CGRect(x: x, y: 190, width: diameter, height: diameter)
-        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.setFillColor(ringColor.cgColor)
         ctx.fillEllipse(in: disc)
         ctx.setFillColor(color.cgColor)
         ctx.fillEllipse(in: disc.insetBy(dx: ring, dy: ring))
@@ -73,8 +74,19 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
 }
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("AppIcon.iconset")
-try? FileManager.default.removeItem(at: iconset)
+let iconset = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".codex/tmp/kaggle-icon/AppIcon.iconset")
+func trashIconset() throws {
+    guard FileManager.default.fileExists(atPath: iconset.path) else { return }
+    let trash = Process()
+    trash.executableURL = URL(fileURLWithPath: "/usr/bin/trash")
+    trash.arguments = [iconset.path]
+    try trash.run()
+    trash.waitUntilExit()
+    guard trash.terminationStatus == 0 else { exit(trash.terminationStatus) }
+    print("Moved temporary iconset to Trash: \(iconset.path)")
+}
+try trashIconset()
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
 for points in [16, 32, 128, 256, 512] {
@@ -92,6 +104,6 @@ iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 iconutil.arguments = ["-c", "icns", iconset.path, "-o", output.path]
 try iconutil.run()
 iconutil.waitUntilExit()
-try? FileManager.default.removeItem(at: iconset)
+try trashIconset()
 print(iconutil.terminationStatus == 0 ? "Wrote \(output.path)" : "iconutil failed")
 exit(iconutil.terminationStatus)

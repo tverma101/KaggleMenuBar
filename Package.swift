@@ -11,6 +11,10 @@ let package = Package(
         .executableTarget(
             name: "KernelWatch",
             path: "Sources/KernelWatch"
+        ),
+        .testTarget(
+            name: "KernelWatchTests",
+            dependencies: ["KernelWatch"]
         )
     ],
     swiftLanguageModes: [.v5]

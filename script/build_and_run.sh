@@ -16,10 +16,12 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
-INSTALL_BUNDLE="$HOME/Applications/$APP_BUNDLE_NAME"
+INSTALL_BUNDLE="/Applications/$APP_BUNDLE_NAME"
+AGENT_LABEL="$BUNDLE_ID"
+AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
+AGENT_DOMAIN="gui/$(id -u)"
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-
+# Build before stopping anything: a failed build must leave monitoring running.
 swift build
 BUILD_BINARY="$(swift build --show-bin-path)/$PRODUCT_NAME"
 
@@ -59,20 +61,73 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
-open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+# Seal the whole app, including its resources, with a stable bundle identifier.
+/usr/bin/codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+/usr/bin/codesign --verify --deep --strict "$APP_BUNDLE"
+
+# Unloading the agent first stops launchd from restarting the installed app
+# while it is replaced, or beside a development copy.
+stop_app() {
+  /bin/launchctl bootout "$AGENT_DOMAIN/$AGENT_LABEL" >/dev/null 2>&1 || true
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 }
 
-# Copies the app to ~/Applications so Spotlight, Launchpad and Finder find "Kaggle".
+open_app() {
+  stop_app
+  /usr/bin/open -n "$APP_BUNDLE"
+  echo "Running the development build. Run '$0 --install' to restore normal monitoring."
+}
+
+# Starts at login and comes back after a crash or kill. Quit from the panel
+# exits cleanly and stays quit until the next login.
+write_agent() {
+  mkdir -p "$(dirname "$AGENT_PLIST")"
+  cat >"$AGENT_PLIST" <<AGENT
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$AGENT_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$INSTALL_BUNDLE/Contents/MacOS/$APP_NAME</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>
+AGENT
+  /usr/bin/plutil -lint "$AGENT_PLIST" >/dev/null
+}
+
+# macOS 27's menu bar assessment allow-list needs the app in /Applications.
 install_app() {
-  mkdir -p "$HOME/Applications"
+  stop_app
   if [[ -e "$INSTALL_BUNDLE" ]]; then
     /usr/bin/trash "$INSTALL_BUNDLE"
   fi
   /usr/bin/ditto "$APP_BUNDLE" "$INSTALL_BUNDLE"
   /usr/bin/touch "$INSTALL_BUNDLE"
-  /usr/bin/open "$INSTALL_BUNDLE"
-  echo "Installed $INSTALL_BUNDLE"
+  write_agent
+  /bin/launchctl bootstrap "$AGENT_DOMAIN" "$AGENT_PLIST"
+  echo "Installed $INSTALL_BUNDLE; launch agent $AGENT_LABEL keeps it running."
 }
 
 case "$MODE" in
