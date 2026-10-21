@@ -1,80 +1,102 @@
-# Kaggle (Kernel Watch)
+<img src="docs/icon.png" width="96" alt="KaggleMenuBar icon">
 
-Kaggle is a menu bar app for checking whether your Kaggle notebooks are queued or running without opening the Kaggle website.
+# KaggleMenuBar
 
-It uses Kaggle's official command line client for sign-in and notebook status. The app does not store Kaggle credentials itself. After you choose **Connect Kaggle**, the official CLI handles its OAuth flow and stores its own credentials. The app then checks your 100 most recently run notebooks every minute and shows only queued or running jobs.
+A macOS menu bar app that shows which of your Kaggle notebooks are queued or running, and for how long, without opening the Kaggle website.
 
-## In the menu bar
+It reads status through Kaggle's official command line client. The app never sees or stores your Kaggle credentials, never submits, edits or deletes notebooks, and makes no Kaggle calls until you choose **Connect Kaggle**.
 
-The item is a muted graphite capsule with a soft white **k**, a stack of overlapping circles, one per active notebook, and a time:
+## Reading the menu bar
 
-- **Sage green** circle: running. **Amber** circle: queued. Running circles come first.
-- The time is how long the longest-running notebook has been going (or the longest wait, when nothing has started yet): `now`, `47m`, `1h12m`, `11h`. Kaggle reports no queue-entry time, and a re-pushed notebook keeps its previous `lastRunTime`, so the time counts from the later of `lastRunTime` and the agent's `kaggle-hub track` call. An untracked notebook whose listed time is over 12 hours old counts from when the hub first saw it active.
-- Up to four circles fit; with more, the first three are followed by a pale `+N` circle.
-- A hollow pale circle means the first status check is still in progress; a muted yellow `!` circle means the last check failed.
+![Every menu bar state on a light and a dark menu bar](docs/menu-bar-states.png)
 
-Clicking the item opens a panel listing each notebook with its status and elapsed time. Hovering shows the same summary as a tooltip.
+*Drawn by the app's own rendering code (`swift test` writes this image when `PILL_GALLERY` is set).*
 
-The menu bar item stays available before connection and during the first status check. After a successful check, it hides when no notebooks are queued or running, reappears when activity is found, and stays visible if a status check fails so the error can be read. Hiding shrinks the item to zero width instead of removing it, so it keeps its menu bar position, including its side of Hidden Bar's arrow, and asks Hidden Bar to hide it fully (see below).
+Each active notebook is a small ring that reads like a watch face:
 
-## Requirements
+- **Color is status.** Green is running, orange is queued. A running ring turns red from 11 hours, an hour before Kaggle stops a 12-hour session.
+- **The arc is minutes.** It fills clockwise from 12 o'clock through the current hour, then starts again.
+- **The middle is hours.** A number counts completed hours. Before the first hour it is a dot: filled when running, hollow when queued, so the two read apart without color.
+- **Rings stack.** Running notebooks come first, longest first, and the first ring sits on top. Up to four fit; with more, the fourth slot becomes a grey `+N`, so eight notebooks take no more room than four.
+- **The time** is how long the longest notebook has been going: `now`, `47m`, `2h45`, `11h`.
+- A grey empty ring means the first check is still running. A yellow `!` means the last check failed; the last known runs stay on screen and the panel says what went wrong.
 
-- macOS 14 or later
-- Swift 6 toolchain
-- Kaggle CLI installed and available to the app
+Click the item for a panel listing each notebook with its status, elapsed time and project. Select a row to open the notebook on Kaggle.
 
-Install the official CLI following its [installation guide](https://github.com/Kaggle/kaggle-cli#installation). The current CLI requires Python 3.11 or later. Then launch the app and choose **Connect Kaggle** once.
+When a check succeeds and nothing is queued or running, the item shrinks to zero width. It keeps its place in the menu bar and comes back as soon as a run is found. Setup, the first check and errors always stay visible. Open the app again (Spotlight, Finder) to show the panel while the item is hidden.
 
 ## Install
 
+You need macOS 14 or later, a Swift 6 toolchain (Xcode 16 or the Command Line Tools) and the Kaggle CLI.
+
+1. Install the official [Kaggle CLI](https://github.com/Kaggle/kaggle-cli#installation), which needs Python 3.11 or later, for example `pipx install kaggle`. The app looks for `kaggle` in `$KAGGLE_CLI_PATH`, your `PATH`, Homebrew, `~/.local/bin` and the Python user bin folders.
+2. Build and install:
+
+   ```sh
+   git clone https://github.com/tverma101/KaggleMenuBar.git
+   cd KaggleMenuBar
+   ./script/build_and_run.sh --install
+   ```
+
+   This builds `KaggleMenuBar.app`, signs it ad hoc, copies it to `/Applications` (an older copy goes to the Trash) and adds a launch agent that starts it at login and restarts it after a crash. Quit from the panel and it stays quit until the next login. A failed build leaves the running copy alone.
+3. Click the item and choose **Connect Kaggle**. The app runs `kaggle auth login`, and the CLI handles sign-in and keeps its own credentials.
+
+The app is not notarized, so there is no prebuilt download; building it yourself is the install.
+
+## Where status comes from
+
+The app has two ways to read status. Pick one with `defaults write app.kernelwatch.KernelWatch activitySource auto|hub|direct`, or for one launch with `KAGGLE_MENUBAR_SOURCE=direct`.
+
+- **`auto`** (the default) uses kaggle-hub when one is installed and otherwise polls the CLI directly.
+- **`direct`** asks the Kaggle CLI itself every minute. It lists your 100 most recently run notebooks, then checks status only for notebooks that may have changed: those seen active, those whose run time changed, and the newest few. Nothing else is needed.
+- **`hub`** reads `kaggle-hub monitor-snapshot`, a small helper that your own scripts and agents can call too, so everything shares one cache, one request budget and one rate-limit cooldown instead of each polling Kaggle on its own. After pushing a notebook, `kaggle-hub track owner/slug` makes it appear within seconds and starts its clock at the push. The reference implementation and its contract are in [`hub-template/`](hub-template/README.md).
+
+Direct mode has one blind spot: if you re-run a notebook whose previous run was more than a day ago, it shows up only after Kaggle updates its listed run time. `kaggle-hub track` closes that gap.
+
+## When a check fails
+
+Kaggle's CLI fails now and then for reasons that fix themselves: timeouts, dropped connections, 5xx responses. The app retries a first failure quietly after 15 seconds, then 45, and shows an error only if the second attempt also fails. Problems that will not fix themselves, such as signing in again, a missing CLI or a rate limit, show at once. A rate limit pauses checks until Kaggle's cooldown ends.
+
+Every check, failure and menu bar change is written to a diagnostic log, so an error you saw once can still be read later:
+
+- `~/Library/Logs/KaggleMenuBar/diagnostics.jsonl`, one JSON object per line, rolling over to `diagnostics.1.jsonl` at 1 MB.
+- Tokens, API keys and secrets are removed before anything is written, and your home folder is shortened to `~`.
+- The panel's **Diagnostics** menu copies a report or shows the log in Finder. An error message has **Copy details** for the full output behind it.
+
+## Development
+
 ```sh
-./script/build_and_run.sh --install
+swift test                                   # app tests
+python3 -m unittest discover -s hub-template/tests -v   # kaggle-hub tests
+./script/build_and_run.sh                    # run from dist/ without installing
 ```
 
-This builds and ad-hoc signs `Kaggle.app`, copies it to `/Applications` (moving any older copy to the Trash) and starts it with the launch agent `~/Library/LaunchAgents/app.kernelwatch.KernelWatch.plist`, which starts it at login and restarts it if it crashes. Quitting from the panel stays quit until the next login or launch. A failed build leaves the running app untouched. Afterwards, launch it like any other app: type "Kaggle" in Spotlight, or open it from Launchpad or Finder. Reopening the running app opens its status panel even while the menu bar item is hidden. The app is menu-bar-only and does not add a Dock icon.
+Running from `dist/` stops the installed copy; `./script/build_and_run.sh --install` brings it back.
 
-## Build and run
-
-```sh
-./script/build_and_run.sh
-```
-
-The script creates `dist/Kaggle.app` and opens it from the repository without installing it. This stops the launch agent so only one copy runs; run `./script/build_and_run.sh --install` afterwards to restore normal monitoring. To build without opening the app:
+To check the layout without a Kaggle account, launch with sample data. Scenarios: `mixed`, `running`, `queued`, `many`, `late`, `checking`, `error`, `idle`, `disconnected` and `cycle` (hides and shows the item every eight seconds).
 
 ```sh
-swift build
+open -n --env KAGGLE_MENUBAR_DEMO=mixed dist/KaggleMenuBar.app
 ```
-
-To check the menu bar layout without a Kaggle account, launch the built app with sample data. Valid values: `mixed`, `running`, `queued`, `many`, `checking`, `error`, `idle`, `disconnected`, and `cycle` (hides and shows the item every eight seconds).
-
-```sh
-open -n --env KERNEL_WATCH_DEMO=mixed dist/Kaggle.app
-```
-
-## Menu bar managers on macOS 27
-
-Hidden Bar 1.11.1 hides items on macOS 27 with the system's assessment-mode restriction, which only honours apps running from `/Applications`. A copy anywhere else (`dist/`, `~/Applications`) is hidden even when placed right of Hidden Bar's arrow ([dwarvesf/hidden#446](https://github.com/dwarvesf/hidden/issues/446)), so check demo runs from `dist/` with Hidden Bar expanded.
-
-- Kaggle tells Hidden Bar when its item goes idle or active (the `com.dwarvesv.minimalbar.statusItemsIdle` and `statusItemsActive` distributed notifications). A Hidden Bar build that understands them (the local build in `~/Projects/HiddenBar`) hides the idle item while collapsed, with no gap. Other builds show the zero-width item's gap of about 10 pt.
-- The local Hidden Bar build lets in apps that launch while it is collapsed and keeps new icons visible until you ⌘-drag them left of the arrow. Upstream 1.11.1 reads its sections only when it collapses, so an item that appears while collapsed can stay hidden until the next expand and collapse.
-- Clicking the clock does not open Notification Center while Hidden Bar is collapsed ([dwarvesf/hidden#410](https://github.com/dwarvesf/hidden/issues/410)).
 
 The app icon is drawn by `swift script/make_icon.swift`, which writes `Resources/AppIcon.icns`.
 
-## What it checks
+### Menu bar managers
 
-- Lists your own notebooks, sorted by most recent run.
-- Checks each notebook's latest run with `kaggle kernels status`.
-- Skips list entries without a usable `owner/notebook` reference; they cannot be queried by the CLI. A list containing only unusable entries reports an error rather than claiming the account is idle.
-- Shows queued and running notebooks in the menu bar popover; selecting a row opens that notebook on Kaggle.
-- Hides its menu bar item while connected and idle; it returns when a queued or running notebook is detected.
-- Keeps setup, the first check, and status-check errors visible. Refreshing an idle account does not briefly bring the item back. Open Kaggle again to view its panel or refresh manually while hidden.
-- Failed checks show a retry message instead of leaving the initial-check spinner running.
-- Checks every minute while connected, with a manual refresh button. `kaggle-hub track` wakes the app with a local notification, so a tracked push appears within seconds.
-- Uses `kaggle-hub monitor-snapshot`, sharing discovery, project links, status results and the request budget with repository agents. The most recently run 100 notebooks are re-listed every minute, so an untracked push appears within about two minutes; older pages are re-listed every 15 minutes. Project names appear in active notebook rows.
-- Counts a just-pushed notebook that Kaggle still reports as `NEW_SCRIPT` as queued for its first hour; older `NEW_SCRIPT` drafts are ignored.
-- The first full check can take several minutes on a large account. Shared requests are spaced three seconds apart. Queued/running statuses are cached for two minutes and finished runs until their listed run time changes (at most 30 days). A rate-limit response pauses all shared readers for five minutes. `kaggle-hub notebooks` shows the saved inventory without making provider requests.
+Idle and active changes are also announced to [Hidden Bar](https://github.com/dwarvesf/hidden) with the `com.dwarvesv.minimalbar.statusItemsIdle` and `statusItemsActive` distributed notifications, so a build that understands them can hide the idle item without a gap. On macOS 27, Hidden Bar 1.11.1 only honours apps running from `/Applications` ([dwarvesf/hidden#446](https://github.com/dwarvesf/hidden/issues/446)), so test copies run from `dist/` with it expanded.
 
-The first version checks up to 100 notebooks per refresh. Kaggle exposes latest-run status per notebook, so accounts with more than 100 notebooks may need a later configurable watch list.
+## Similar projects
 
-The app only reads status. It does not submit, edit, or delete notebooks. Connecting and refreshing uses your existing Kaggle CLI authentication; no Kaggle account calls happen until you choose **Connect Kaggle**.
+I found no other menu bar app for Kaggle notebooks. The closest tools are terminal-based:
+
+- The official [Kaggle CLI](https://github.com/Kaggle/kaggle-cli): `kaggle kernels status owner/slug` checks one notebook at a time.
+- [kkt](https://github.com/ar90n/kkt): a CLI for pushing notebooks and checking their latest status; last updated in 2020.
+- [kaggle-manager](https://github.com/mayurnewase/kaggle-manager): a 2019 script that uploads a notebook, polls it and notifies you when it finishes.
+
+KaggleMenuBar watches all your notebooks at once, shows elapsed time against Kaggle's 12-hour limit at a glance, and shares its request budget with your own scripts through kaggle-hub.
+
+## License
+
+[MIT](LICENSE). Use it, change it, share it. It comes with no warranty.
+
+KaggleMenuBar is not affiliated with or endorsed by Kaggle or Google.

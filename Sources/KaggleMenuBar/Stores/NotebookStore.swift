@@ -138,6 +138,11 @@ final class NotebookStore: ObservableObject {
                 run("audio-features-export", .queued, minutesAgo: 1),
                 run("cv-folds-rebuild", .queued, minutesAgo: 0.5),
             ]
+        case "late":
+            activeRuns = [
+                run("llm-finetune-qlora", .running, minutesAgo: 680),
+                run("eval-sweep-seeds", .queued, minutesAgo: 75),
+            ]
         case "error":
             activeRuns = [run("llm-finetune-qlora", .running, minutesAgo: 47)]
             errorMessage = "Kaggle CLI timed out. Will retry in two minutes."
@@ -160,8 +165,8 @@ final class NotebookStore: ObservableObject {
             }
         default:
             activeRuns = [
-                run("llm-finetune-qlora", .running, minutesAgo: 47),
-                run("vision-transformer-ablation", .running, minutesAgo: 12),
+                run("llm-finetune-qlora", .running, minutesAgo: 165),
+                run("vision-transformer-ablation", .running, minutesAgo: 47),
                 run("eval-sweep-seeds", .queued, minutesAgo: 3),
             ]
         }

@@ -5,3 +5,5 @@ dist/
 *.xcuserstate
 __pycache__/
 *.pyc
+AGENTS.local.md
+.codex/
