@@ -1,19 +1,43 @@
-// Draws Resources/AppIcon.icns: the app's mark (a rounded "k" inside a clock
-// ring three quarters of the way round, as BrandMark in
-// Sources/KaggleMenuBar/Design/KaggleStyle.swift draws it) on a graphite body.
+// Draws Resources/AppIcon.icns: the original layout, a tall rounded "k" with
+// two overlapping circles at its baseline, where each circle now sits inside a
+// clock ring like the menu bar's. The first ring is on top, as in the menu bar.
 // Run from the repo root: swift script/make_icon.swift
 import AppKit
 import CoreText
 
-let surface = NSColor(srgbRed: 0x30 / 255, green: 0x37 / 255, blue: 0x33 / 255, alpha: 1)
-let surfaceDeep = NSColor(srgbRed: 0x1F / 255, green: 0x24 / 255, blue: 0x21 / 255, alpha: 1)
-let foreground = NSColor(srgbRed: 0xF4 / 255, green: 0xF6 / 255, blue: 0xF1 / 255, alpha: 1)
-// systemGreen as macOS draws it on dark backgrounds.
-let green = NSColor(srgbRed: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255, alpha: 1)
+func srgb(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
+    NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+}
 
-func roundedBold(_ size: CGFloat) -> NSFont {
-    let base = NSFont.systemFont(ofSize: size, weight: .bold)
+let surface = srgb(0x303733)
+let surfaceDeep = srgb(0x1F2421)
+let foreground = srgb(0xF4F6F1)
+// systemGreen and systemOrange as macOS draws them on dark backgrounds.
+let green = srgb(0x30D158)
+let orange = srgb(0xFF9F0A)
+
+func roundedFont(_ size: CGFloat) -> NSFont {
+    let base = NSFont.systemFont(ofSize: size, weight: .semibold)
     return NSFont(descriptor: base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor, size: size) ?? base
+}
+
+/// A pale track (the original circles' outline), the colored arc from 12
+/// o'clock, and the original filled circle inside.
+func drawRing(_ ctx: CGContext, center: CGPoint, color: NSColor, fraction: CGFloat) {
+    let radius: CGFloat = 80
+    ctx.setLineWidth(30)
+    ctx.setStrokeColor(foreground.withAlphaComponent(0.55).cgColor)
+    ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+    ctx.strokePath()
+    ctx.setStrokeColor(color.cgColor)
+    ctx.setLineCap(.round)
+    ctx.addArc(center: center, radius: radius, startAngle: .pi / 2,
+               endAngle: .pi / 2 - fraction * 2 * .pi, clockwise: true)
+    ctx.strokePath()
+    let core = radius * 0.6
+    ctx.setFillColor(color.cgColor)
+    ctx.fillEllipse(in: CGRect(x: center.x - core, y: center.y - core, width: core * 2, height: core * 2))
 }
 
 func drawIcon(pixels: Int) -> NSBitmapImageRep {
@@ -37,29 +61,31 @@ func drawIcon(pixels: Int) -> NSBitmapImageRep {
     ctx.restoreGState()
     NSGradient(starting: surface, ending: surfaceDeep)!.draw(in: shape, angle: -90)
 
-    // The ring: a faint full track, then the green arc from 12 o'clock.
-    let center = CGPoint(x: 512, y: 512)
-    let lineWidth: CGFloat = 64
-    let radius: CGFloat = 268
-    ctx.setLineWidth(lineWidth)
-    ctx.setStrokeColor(foreground.withAlphaComponent(0.16).cgColor)
-    ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
-    ctx.strokePath()
-    ctx.setStrokeColor(green.cgColor)
-    ctx.setLineCap(.round)
-    ctx.addArc(center: center, radius: radius, startAngle: .pi / 2, endAngle: .pi / 2 - 1.5 * .pi, clockwise: true)
-    ctx.strokePath()
-
-    // The k, centered on its own ink.
+    // The k, 440 pt of ink standing on y = 290.
+    let probe = CTLineCreateWithAttributedString(NSAttributedString(string: "k", attributes: [.font: roundedFont(100)]))
+    let fontSize = 100 * 440 / CTLineGetBoundsWithOptions(probe, .useGlyphPathBounds).height
     let attributes: [NSAttributedString.Key: Any] = [
-        .font: roundedBold(370),
+        .font: roundedFont(fontSize),
         NSAttributedString.Key(kCTForegroundColorAttributeName as String): foreground.cgColor,
     ]
     let line = CTLineCreateWithAttributedString(NSAttributedString(string: "k", attributes: attributes))
     let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
     ctx.textMatrix = .identity
-    ctx.textPosition = CGPoint(x: center.x + 6 - ink.midX, y: center.y - ink.midY)
+    ctx.textPosition = CGPoint(x: 206 - ink.minX, y: 290 - ink.minY)
     CTLineDraw(line, ctx)
+
+    // Running in front, queued behind; the front ring cuts a gap out of the
+    // one behind it, as ClockRing's cutoutRadius does in the menu bar.
+    let front = CGPoint(x: 604, y: 292)
+    let back = CGPoint(x: 754, y: 292)
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    drawRing(ctx, center: back, color: orange, fraction: 0.35)
+    ctx.setBlendMode(.clear)
+    let cutout: CGFloat = 95 * 1.16
+    ctx.fillEllipse(in: CGRect(x: front.x - cutout, y: front.y - cutout, width: cutout * 2, height: cutout * 2))
+    ctx.setBlendMode(.normal)
+    drawRing(ctx, center: front, color: green, fraction: 0.75)
+    ctx.endTransparencyLayer()
 
     NSGraphicsContext.restoreGraphicsState()
     return rep

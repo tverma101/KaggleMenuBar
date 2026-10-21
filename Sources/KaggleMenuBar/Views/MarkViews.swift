@@ -8,50 +8,47 @@ struct RunRing: View {
     var size: CGFloat = 20
 
     var body: some View {
-        MarkCanvas(content: .ring(ClockRing(
+        MarkCanvas(ring: ClockRing(
             style: run.status == .running ? .running : .queued,
             minutes: run.lastRunAt.map { max(0, Int(now.timeIntervalSince($0) / 60)) }
-        )))
+        ))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 }
 
-/// The app's mark for the panel header.
+/// The app icon, for the panel header.
 struct BrandBadge: View {
-    var size: CGFloat = 26
+    var size: CGFloat = 30
 
     var body: some View {
-        MarkCanvas(content: .brand)
+        Image(nsImage: NSApplication.shared.applicationIconImage)
+            .resizable()
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
 }
 
-/// Hosts the Core Graphics marks, which resolve system colors against the
+/// Hosts the Core Graphics ring, which resolves system colors against the
 /// panel's appearance the same way the menu bar item does.
 private struct MarkCanvas: NSViewRepresentable {
-    let content: MarkView.Content
+    let ring: ClockRing
 
-    func makeNSView(context: Context) -> MarkView { MarkView() }
+    func makeNSView(context: Context) -> MarkView { MarkView(ring: ring) }
 
     func updateNSView(_ view: MarkView, context: Context) {
-        view.content = content
+        view.ring = ring
     }
 }
 
 private final class MarkView: NSView {
-    enum Content: Equatable {
-        case ring(ClockRing)
-        case brand
+    var ring: ClockRing {
+        didSet { if ring != oldValue { needsDisplay = true } }
     }
 
-    var content: Content = .brand {
-        didSet { if content != oldValue { needsDisplay = true } }
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(ring: ClockRing) {
+        self.ring = ring
+        super.init(frame: .zero)
         setAccessibilityElement(false)
     }
 
@@ -70,13 +67,7 @@ private final class MarkView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let side = min(bounds.width, bounds.height)
-        switch content {
-        case let .ring(ring):
-            let scale = side / (ClockRing.outerRadius * 2 + 0.5)
-            ring.draw(in: context, center: CGPoint(x: bounds.midX, y: bounds.midY), scale: scale)
-        case .brand:
-            BrandMark.draw(in: context, rect: bounds.insetBy(dx: 0.5, dy: 0.5))
-        }
+        let scale = min(bounds.width, bounds.height) / (ClockRing.outerRadius * 2 + 0.5)
+        ring.draw(in: context, center: CGPoint(x: bounds.midX, y: bounds.midY), scale: scale)
     }
 }
