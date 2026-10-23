@@ -43,16 +43,27 @@ final class NotebookStore: ObservableObject {
         let streak: Int
     }
 
-    /// Keep setup/checking/errors reachable; a confirmed idle account stays quiet.
-    /// Derive this from the snapshot so visibility cannot drift from the run list.
+    /// Hardware whose runs the user keeps out of the menu bar. Runs whose
+    /// hardware is unknown always show.
+    @Published private(set) var hiddenAccelerators: Set<Accelerator>
+
+    /// The active runs the menu bar shows.
+    var menuBarRuns: [NotebookRun] {
+        activeRuns.filter { run in run.accelerator.map { !hiddenAccelerators.contains($0) } ?? true }
+    }
+
+    /// Keep setup/checking/errors reachable; a confirmed idle account stays
+    /// quiet, and so does one whose runs are all filtered out. Derive this from
+    /// the snapshot so visibility cannot drift from the run list.
     var isStatusItemVisible: Bool {
         connectionState != .connected
             || lastUpdated == nil
             || errorMessage != nil
-            || !activeRuns.isEmpty
+            || !menuBarRuns.isEmpty
     }
 
     private static let connectedPreference = "hasConnectedToKaggle"
+    static let hiddenAcceleratorsPreference = "hiddenAccelerators"
     /// The hub refreshes its newest notebook page once a minute, so a poll at
     /// the same pace shows a new agent run within about a minute.
     static let pollInterval: Duration = .seconds(60)
@@ -81,6 +92,7 @@ final class NotebookStore: ObservableObject {
         self.now = now
         self.log = log
         isDemo = false
+        hiddenAccelerators = Self.hiddenAccelerators(in: defaults)
         let wasConnected = defaults.bool(forKey: Self.connectedPreference)
         connectionState = wasConnected ? .connected : .disconnected
         if wasConnected && startPolling {
@@ -104,13 +116,16 @@ final class NotebookStore: ObservableObject {
         defaults = .standard
         self.now = Date.init
         isDemo = true
+        hiddenAccelerators = Self.hiddenAccelerators(in: .standard)
         let now = Date()
-        func run(_ slug: String, _ status: NotebookRunStatus, minutesAgo: Double) -> NotebookRun {
+        func run(_ slug: String, _ status: NotebookRunStatus, minutesAgo: Double,
+                 on accelerator: Accelerator? = nil) -> NotebookRun {
             NotebookRun(
                 ref: "demo/\(slug)",
                 title: slug,
                 status: status,
-                lastRunAt: now.addingTimeInterval(-minutesAgo * 60)
+                lastRunAt: now.addingTimeInterval(-minutesAgo * 60),
+                accelerator: accelerator
             )
         }
 
@@ -124,27 +139,27 @@ final class NotebookStore: ObservableObject {
             lastUpdated = nil
             isRefreshing = true
         case "queued":
-            activeRuns = [run("llm-finetune-qlora", .queued, minutesAgo: 3)]
+            activeRuns = [run("llm-finetune-qlora", .queued, minutesAgo: 3, on: .gpu)]
         case "running":
-            activeRuns = [run("llm-finetune-qlora", .running, minutesAgo: 47)]
+            activeRuns = [run("llm-finetune-qlora", .running, minutesAgo: 47, on: .gpu)]
         case "many":
             activeRuns = [
-                run("llm-finetune-qlora", .running, minutesAgo: 134),
-                run("vision-transformer-ablation", .running, minutesAgo: 41),
-                run("tabular-baseline-lightgbm", .running, minutesAgo: 6),
-                run("data-cleaning-pass-2", .queued, minutesAgo: 4),
-                run("eval-sweep-seeds", .queued, minutesAgo: 2),
-                run("submission-ensemble", .queued, minutesAgo: 1),
+                run("llm-finetune-qlora", .running, minutesAgo: 134, on: .gpu),
+                run("vision-transformer-ablation", .running, minutesAgo: 41, on: .tpu),
+                run("tabular-baseline-lightgbm", .running, minutesAgo: 6, on: .cpu),
+                run("data-cleaning-pass-2", .queued, minutesAgo: 4, on: .cpu),
+                run("eval-sweep-seeds", .queued, minutesAgo: 2, on: .cpu),
+                run("submission-ensemble", .queued, minutesAgo: 1, on: .cpu),
                 run("audio-features-export", .queued, minutesAgo: 1),
-                run("cv-folds-rebuild", .queued, minutesAgo: 0.5),
+                run("cv-folds-rebuild", .queued, minutesAgo: 0.5, on: .gpu),
             ]
         case "late":
             activeRuns = [
-                run("llm-finetune-qlora", .running, minutesAgo: 680),
-                run("eval-sweep-seeds", .queued, minutesAgo: 75),
+                run("llm-finetune-qlora", .running, minutesAgo: 680, on: .gpu),
+                run("eval-sweep-seeds", .queued, minutesAgo: 75, on: .cpu),
             ]
         case "error":
-            activeRuns = [run("llm-finetune-qlora", .running, minutesAgo: 47)]
+            activeRuns = [run("llm-finetune-qlora", .running, minutesAgo: 47, on: .gpu)]
             errorMessage = "Kaggle CLI timed out. Will retry in two minutes."
         case "idle":
             activeRuns = []
@@ -152,8 +167,8 @@ final class NotebookStore: ObservableObject {
             // Hides and brings back the status item every few seconds, to check
             // that it returns to the place the user dragged it to.
             let busy = [
-                run("llm-finetune-qlora", .running, minutesAgo: 47),
-                run("eval-sweep-seeds", .queued, minutesAgo: 3),
+                run("llm-finetune-qlora", .running, minutesAgo: 47, on: .gpu),
+                run("eval-sweep-seeds", .queued, minutesAgo: 3, on: .cpu),
             ]
             activeRuns = busy
             pollingTask = Task { [weak self] in
@@ -165,12 +180,30 @@ final class NotebookStore: ObservableObject {
             }
         default:
             activeRuns = [
-                run("llm-finetune-qlora", .running, minutesAgo: 165),
-                run("vision-transformer-ablation", .running, minutesAgo: 47),
-                run("eval-sweep-seeds", .queued, minutesAgo: 3),
+                run("llm-finetune-qlora", .running, minutesAgo: 165, on: .gpu),
+                run("vision-transformer-ablation", .running, minutesAgo: 47, on: .tpu),
+                run("eval-sweep-seeds", .queued, minutesAgo: 3, on: .cpu),
             ]
         }
         notebooksChecked = 24
+    }
+
+    /// Shows or hides runs on `accelerator` in the menu bar. The panel always
+    /// lists every run.
+    func setShowsInMenuBar(_ accelerator: Accelerator, _ shows: Bool) {
+        if shows {
+            hiddenAccelerators.remove(accelerator)
+        } else {
+            hiddenAccelerators.insert(accelerator)
+        }
+        guard !isDemo else { return }
+        let hidden = hiddenAccelerators.map(\.rawValue).sorted()
+        defaults.set(hidden, forKey: Self.hiddenAcceleratorsPreference)
+        log.record("menu_bar_filter", ["hidden": hidden])
+    }
+
+    private static func hiddenAccelerators(in defaults: UserDefaults) -> Set<Accelerator> {
+        Set((defaults.stringArray(forKey: hiddenAcceleratorsPreference) ?? []).compactMap(Accelerator.init(rawValue:)))
     }
 
     func connect() {

@@ -7,13 +7,14 @@
 `kaggle-hub monitor-snapshot` prints one JSON object on stdout and exits 0:
 
 ```json
-{"activeRuns":[{"ref":"owner/slug","title":"str","status":"QUEUED","lastRunAt":"2026-10-19T12:00:00.000000","project":null}],
+{"activeRuns":[{"ref":"owner/slug","title":"str","status":"QUEUED","lastRunAt":"2026-10-19T12:00:00.000000","project":null,"accelerator":"GPU"}],
  "notebooksChecked":1,"unavailableCount":0,"checkedAt":1792411200.0}
 ```
 
 - `status` is `QUEUED` or `RUNNING`.
 - `lastRunAt` is UTC with no zone suffix, in the format `%Y-%m-%dT%H:%M:%S.%f`, or `null`.
 - `project` is a string or `null`.
+- `accelerator` is `CPU`, `GPU`, `TPU` or `null` when the hub does not know. Older hubs leave it out, which the app reads as `null`. The app also accepts a Kaggle machine shape such as `NvidiaTeslaT4`.
 - `notebooksChecked` counts the usable notebooks in the Kaggle list, plus tracked notebooks that the list does not show yet.
 - `unavailableCount` counts notebooks Kaggle refused to report on (403, 404 or "Cannot access kernel"), plus list rows that had no valid `owner/slug` ref.
 - `checkedAt` is the Unix time in seconds when the snapshot finished.
@@ -21,7 +22,9 @@
 
 On failure the command exits 2 and prints exactly one line to stderr, `kaggle-hub: <message>`. Messages are at most 300 characters and have `Bearer` tokens, `KGAT_` keys and `api_key`, `token` or `secret` values removed.
 
-`kaggle-hub track REF [--project NAME]` records that a notebook was just pushed. `REF` is `owner/slug` or `https://www.kaggle.com/code/owner/slug`. The notebook's elapsed time starts now, and the next snapshot re-checks its status. On macOS the command then posts the Darwin notification `app.kernelwatch.KernelWatch.refresh` so the app refreshes. It prints `{"ref":"owner/slug","trackedAt":1792411200.0}`.
+`kaggle-hub track REF [--project NAME] [--accelerator NAME]` records that a notebook was just pushed. `REF` is `owner/slug` or `https://www.kaggle.com/code/owner/slug`. `--accelerator` is `CPU`, `GPU`, `TPU` or a Kaggle machine shape such as `NvidiaTeslaT4` or `TpuV6E8`, stored as one of the three; anything else is an error. The notebook's elapsed time starts now, and the next snapshot re-checks its status. On macOS the command then posts the Darwin notification `app.kernelwatch.KernelWatch.refresh` so the app refreshes. It prints `{"ref":"owner/slug","trackedAt":1792411200.0}`.
+
+A snapshot reports `accelerator` only for notebooks tracked with `--accelerator`: Kaggle's notebook list does not include it, and the hub makes no extra requests to find it.
 
 ## How a snapshot works
 
@@ -58,7 +61,7 @@ The app looks for the executable at `$KAGGLE_HUB_PATH`, then `~/.local/bin/kaggl
 Call `track` right after a successful push so the app shows the run at once:
 
 ```sh
-kaggle kernels push -p ./my-notebook && kaggle-hub track owner/slug --project my-project
+kaggle kernels push -p ./my-notebook && kaggle-hub track owner/slug --project my-project --accelerator GPU
 ```
 
 ## Tests

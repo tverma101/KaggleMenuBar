@@ -86,6 +86,21 @@ final class KaggleCLITests: XCTestCase {
         XCTAssertEqual(snapshot.source, .hub)
     }
 
+    func testHubAcceleratorIsReadFromNamesAndMachineShapes() throws {
+        let snapshot = try KaggleCLI.decodeHubSnapshot(#"""
+        {"activeRuns":[
+          {"ref":"a/1","title":"1","status":"RUNNING","lastRunAt":null,"project":null,"accelerator":"GPU"},
+          {"ref":"a/2","title":"2","status":"RUNNING","lastRunAt":null,"project":null,"accelerator":"NvidiaTeslaT4"},
+          {"ref":"a/3","title":"3","status":"RUNNING","lastRunAt":null,"project":null,"accelerator":"TpuV6E8"},
+          {"ref":"a/4","title":"4","status":"QUEUED","lastRunAt":null,"project":null,"accelerator":"CPU"},
+          {"ref":"a/5","title":"5","status":"QUEUED","lastRunAt":null,"project":null,"accelerator":null},
+          {"ref":"a/6","title":"6","status":"QUEUED","lastRunAt":null,"project":null,"accelerator":"Abacus"},
+          {"ref":"a/7","title":"7","status":"QUEUED","lastRunAt":null,"project":null}],
+         "notebooksChecked":7,"unavailableCount":0,"checkedAt":1792450000}
+        """#)
+        XCTAssertEqual(snapshot.activeRuns.map(\.accelerator), [.gpu, .gpu, .tpu, .cpu, nil, nil, nil])
+    }
+
     /// The bug behind "random" errors: the hub cut a traceback after its first
     /// 1500 characters and the app showed the last line, a stack frame path.
     func testTruncatedHubTracebackIsNotShownAsAFilePath() async throws {

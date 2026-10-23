@@ -1,16 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// A run's ring in the panel: the menu bar ring, larger, drawn by the same code.
+/// A run's circle in the panel: the menu bar circle on a graphite disc,
+/// larger, drawn by the same code.
 struct RunRing: View {
     let run: NotebookRun
     let now: Date
-    var size: CGFloat = 20
+    var size: CGFloat = 24
 
     var body: some View {
         MarkCanvas(ring: ClockRing(
             style: run.status == .running ? .running : .queued,
-            minutes: run.lastRunAt.map { max(0, Int(now.timeIntervalSince($0) / 60)) }
+            minutes: run.lastRunAt.map { max(0, Int(now.timeIntervalSince($0) / 60)) },
+            accelerator: run.accelerator
         ))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -29,8 +31,7 @@ struct BrandBadge: View {
     }
 }
 
-/// Hosts the Core Graphics ring, which resolves system colors against the
-/// panel's appearance the same way the menu bar item does.
+/// Hosts the Core Graphics circle the menu bar item draws.
 private struct MarkCanvas: NSViewRepresentable {
     let ring: ClockRing
 
@@ -60,14 +61,13 @@ private final class MarkView: NSView {
     /// Clicks belong to the row button around the mark.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let scale = min(bounds.width, bounds.height) / (ClockRing.outerRadius * 2 + 0.5)
-        ring.draw(in: context, center: CGPoint(x: bounds.midX, y: bounds.midY), scale: scale)
+        // As much capsule around the circle as the menu bar's end cap has.
+        let side = min(bounds.width, bounds.height)
+        let backing = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+        context.setFillColor(KaggleStyle.capsule.cgColor)
+        context.fillEllipse(in: backing)
+        ring.draw(in: context, center: CGPoint(x: bounds.midX, y: bounds.midY), scale: side / PillMetrics.height)
     }
 }

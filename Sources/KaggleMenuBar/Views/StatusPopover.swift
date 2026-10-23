@@ -104,7 +104,9 @@ struct StatusPopover: View {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(store.activeRuns) { run in
-                        NotebookRow(run: run, now: context.date, onOpen: onOpen)
+                        NotebookRow(run: run, now: context.date,
+                                    hiddenFromMenuBar: run.accelerator.map(store.hiddenAccelerators.contains) ?? false,
+                                    onOpen: onOpen)
                     }
                 }
                 .padding(6)
@@ -160,7 +162,7 @@ struct StatusPopover: View {
     private func errorNotice(_ message: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color(nsColor: KaggleStyle.warning))
+                .foregroundStyle(Color(nsColor: KaggleStyle.warningText))
             VStack(alignment: .leading, spacing: 5) {
                 Text(message)
                     .foregroundStyle(.primary.opacity(0.85))
@@ -189,11 +191,31 @@ struct StatusPopover: View {
             Text(footerStatus)
                 .monospacedDigit()
             Spacer()
+            menuBarFilter
             diagnosticsMenu
             FooterButton(title: "Quit") { NSApp.terminate(nil) }
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
+    }
+
+    /// Which runs the menu bar shows, by hardware. Runs whose hardware the
+    /// hub does not report always show.
+    private var menuBarFilter: some View {
+        Menu("Show") {
+            Section("Show in Menu Bar") {
+                ForEach(Accelerator.allCases, id: \.self) { accelerator in
+                    Toggle("\(accelerator.label) Runs", isOn: Binding(
+                        get: { !store.hiddenAccelerators.contains(accelerator) },
+                        set: { store.setShowsInMenuBar(accelerator, $0) }
+                    ))
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Choose which runs show in the menu bar")
     }
 
     private var diagnosticsMenu: some View {

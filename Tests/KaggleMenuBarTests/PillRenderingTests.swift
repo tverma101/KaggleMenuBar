@@ -9,25 +9,25 @@ final class PillRenderingTests: XCTestCase {
     private static let scenarios: [(name: String, model: PillModel)] = [
         ("Not connected", PillModel()),
         ("First check", PillModel(indicators: [.checking])),
-        ("Running 12 min", PillModel(indicators: [.run(ref: "a", status: .running, minutes: 12)], elapsed: "12m")),
-        ("Queued 4 min", PillModel(indicators: [.run(ref: "a", status: .queued, minutes: 4)], elapsed: "4m")),
-        ("Running 2 h 45", PillModel(indicators: [.run(ref: "a", status: .running, minutes: 165)], elapsed: "2h45")),
-        ("Two running, one queued", PillModel(indicators: [
-            .run(ref: "a", status: .running, minutes: 165),
-            .run(ref: "b", status: .running, minutes: 47),
-            .run(ref: "c", status: .queued, minutes: 3),
+        ("Running 12 min, GPU", PillModel(indicators: [.run(ref: "a", status: .running, minutes: 12, accelerator: .gpu)], elapsed: "12m")),
+        ("Queued 4 min, CPU", PillModel(indicators: [.run(ref: "a", status: .queued, minutes: 4, accelerator: .cpu)], elapsed: "4m")),
+        ("Running 2 h 45, no hub data", PillModel(indicators: [.run(ref: "a", status: .running, minutes: 165)], elapsed: "2h45")),
+        ("GPU, TPU and queued CPU", PillModel(indicators: [
+            .run(ref: "a", status: .running, minutes: 165, accelerator: .gpu),
+            .run(ref: "b", status: .running, minutes: 47, accelerator: .tpu),
+            .run(ref: "c", status: .queued, minutes: 3, accelerator: .cpu),
         ], elapsed: "2h45")),
         ("Eight active", PillModel(indicators: [
-            .run(ref: "a", status: .running, minutes: 134),
-            .run(ref: "b", status: .running, minutes: 41),
-            .run(ref: "c", status: .running, minutes: 6),
+            .run(ref: "a", status: .running, minutes: 134, accelerator: .gpu),
+            .run(ref: "b", status: .running, minutes: 41, accelerator: .gpu),
+            .run(ref: "c", status: .running, minutes: 6, accelerator: .cpu),
         ], overflowCount: 5, elapsed: "2h14")),
         ("Near the 12 h limit", PillModel(indicators: [
-            .run(ref: "a", status: .running, minutes: 680),
-            .run(ref: "b", status: .queued, minutes: 75),
+            .run(ref: "a", status: .running, minutes: 680, accelerator: .gpu),
+            .run(ref: "b", status: .queued, minutes: 75, accelerator: .cpu),
         ], elapsed: "11h20")),
         ("Check failed, last runs kept", PillModel(indicators: [
-            .run(ref: "a", status: .running, minutes: 47),
+            .run(ref: "a", status: .running, minutes: 47, accelerator: .gpu),
         ], showsWarning: true, elapsed: "47m")),
         ("Check failed, nothing known", PillModel(indicators: [.checking], showsWarning: true)),
     ]

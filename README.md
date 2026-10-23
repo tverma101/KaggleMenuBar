@@ -12,16 +12,16 @@ It reads status through Kaggle's official command line client. The app never see
 
 *Drawn by the app's own rendering code (`swift test` writes this image when `PILL_GALLERY` is set).*
 
-Each active notebook is a small ring that reads like a watch face:
+Each active notebook is a circle on a graphite capsule, beside Kaggle's k:
 
-- **Color is status.** Green is running, orange is queued. A running ring turns red from 11 hours, an hour before Kaggle stops a 12-hour session.
-- **The arc is minutes.** It fills clockwise from 12 o'clock through the current hour, then starts again.
-- **The middle is hours.** A number counts completed hours. Before the first hour it is a dot: filled when running, hollow when queued, so the two read apart without color.
-- **Rings stack.** Running notebooks come first, longest first, and the first ring sits on top. Up to four fit; with more, the fourth slot becomes a grey `+N`, so eight notebooks take no more room than four.
+- **Color is status.** Sage is running, amber is queued. A running notebook turns brick red from 11 hours, an hour before Kaggle stops a 12-hour session.
+- **The ring is a 12-hour dial.** Its pale arc fills clockwise from 12 o'clock with the time the notebook has been going, so a full ring is Kaggle's session limit. A run that just started shows a dot at the top.
+- **The glyph is the hardware.** A chip for CPU, a graphics card for GPU, four tiles for TPU. Only kaggle-hub reports the hardware (see [below](#cpu-gpu-and-tpu)); without it the circle is plain.
+- **Circles stack.** Running notebooks come first, longest first, and the first circle sits on top. Up to four fit; with more, the fourth becomes a pale `+N`, so eight notebooks take no more room than four.
 - **The time** is how long the longest notebook has been going: `now`, `47m`, `2h45`, `11h`.
-- A grey empty ring means the first check is still running. A yellow `!` means the last check failed; the last known runs stay on screen and the panel says what went wrong.
+- A hollow ring means the first check is still running. A wheat `!` means the last check failed; the last known runs stay on screen and the panel says what went wrong.
 
-Click the item for a panel listing each notebook with its status, elapsed time and project. Select a row to open the notebook on Kaggle.
+Click the item for a panel listing each notebook with its status, hardware, elapsed time and project. Select a row to open the notebook on Kaggle.
 
 When a check succeeds and nothing is queued or running, the item shrinks to zero width. It keeps its place in the menu bar and comes back as soon as a run is found. Setup, the first check and errors always stay visible. Open the app again (Spotlight, Finder) to show the panel while the item is hidden.
 
@@ -52,6 +52,18 @@ The app has two ways to read status. Pick one with `defaults write app.kernelwat
 - **`hub`** reads `kaggle-hub monitor-snapshot`, a small helper that your own scripts and agents can call too, so everything shares one cache, one request budget and one rate-limit cooldown instead of each polling Kaggle on its own. After pushing a notebook, `kaggle-hub track owner/slug` makes it appear within seconds and starts its clock at the push. The reference implementation and its contract are in [`hub-template/`](hub-template/README.md).
 
 Direct mode has one blind spot: if you re-run a notebook whose previous run was more than a day ago, it shows up only after Kaggle updates its listed run time. `kaggle-hub track` closes that gap.
+
+## CPU, GPU and TPU
+
+The panel's **Show** menu chooses which runs appear in the menu bar: CPU runs, GPU runs and TPU runs can each be switched off. The panel still lists every run and marks hidden ones with a crossed-out eye. When every active run is hidden, the item hides as it does when nothing is running; the panel stays open so you can switch one back, and opening KaggleMenuBar again from Spotlight or Finder brings it back later.
+
+Kaggle's notebook list does not say which hardware a run uses, so the app knows it only when kaggle-hub reports it. With the reference hub, pass it when you track a push:
+
+```sh
+kaggle kernels push -p ./my-notebook && kaggle-hub track owner/slug --accelerator NvidiaTeslaT4
+```
+
+`--accelerator` takes `CPU`, `GPU`, `TPU` or a Kaggle machine shape such as `NvidiaTeslaT4` or `TpuV6E8`. Runs with unknown hardware, including every run in direct mode, are drawn without a glyph and always show.
 
 ## When a check fails
 

@@ -148,7 +148,8 @@ final class StatusItemController: NSObject {
             pillView.isHidden = false
             syncPillFrame()
         } else {
-            panel.dismiss()
+            // An open panel stays where it is, as it does when opened while
+            // idle, so turning off the last shown hardware can be undone.
             pillView.isHidden = true
             statusItem.length = 0
         }
@@ -207,13 +208,16 @@ final class StatusItemController: NSObject {
             func longestFirst(_ lhs: NotebookRun, _ rhs: NotebookRun) -> Bool {
                 (minutes(lhs) ?? -1) > (minutes(rhs) ?? -1)
             }
-            let running = store.activeRuns.filter { $0.status == .running }.sorted(by: longestFirst)
-            let queued = store.activeRuns.filter { $0.status == .queued }.sorted(by: longestFirst)
+            let shown = store.menuBarRuns
+            let running = shown.filter { $0.status == .running }.sorted(by: longestFirst)
+            let queued = shown.filter { $0.status == .queued }.sorted(by: longestFirst)
             let runs = running + queued
             let visible = runs.count > PillMetrics.maxVisibleRings
                 ? Array(runs.prefix(PillMetrics.maxVisibleRings - 1))
                 : runs
-            model.indicators = visible.map { .run(ref: $0.ref, status: $0.status, minutes: minutes($0)) }
+            model.indicators = visible.map {
+                .run(ref: $0.ref, status: $0.status, minutes: minutes($0), accelerator: $0.accelerator)
+            }
             model.overflowCount = runs.count - visible.count
             // The longest-running notebook, or the longest wait when none has started.
             let timed = (running.isEmpty ? queued : running).compactMap(\.lastRunAt)

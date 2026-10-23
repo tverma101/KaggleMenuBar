@@ -161,9 +161,10 @@ class SnapshotTests(HubTestCase):
         runs = {run["ref"]: run for run in result["activeRuns"]}
         self.assertEqual(set(runs), {"alice/running-nb", "alice/queued-nb"})
         for run in runs.values():
-            self.assertEqual(set(run), {"ref", "title", "status", "lastRunAt", "project"})
+            self.assertEqual(set(run), {"ref", "title", "status", "lastRunAt", "project", "accelerator"})
             self.assertRegex(run["lastRunAt"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}$")
             self.assertIsNone(run["project"])
+            self.assertIsNone(run["accelerator"])
         self.assertEqual(runs["alice/running-nb"]["status"], "RUNNING")
         self.assertEqual(runs["alice/running-nb"]["title"], "Running notebook")
         self.assertEqual(runs["alice/queued-nb"]["status"], "QUEUED")
@@ -430,6 +431,24 @@ class TrackTests(HubTestCase):
         self.assertGreater(len(self.status_calls("alice/nb")), before)
         self.assertAlmostEqual(to_epoch(run["lastRunAt"]), tracked["trackedAt"], places=5)
         self.assertEqual(run["project"], "demo")
+
+    def test_track_records_the_accelerator(self):
+        self.set_list([("alice/gpu", "G", listed(hours_ago(1))), ("alice/tpu", "T", listed(hours_ago(2))),
+                       ("alice/plain", "P", listed(hours_ago(3)))])
+        for ref in ("alice/gpu", "alice/tpu", "alice/plain"):
+            self.set_status(ref, "RUNNING")
+        self.assertEqual(self.run_hub("track", "alice/gpu", "--accelerator", "NvidiaTeslaT4").returncode, 0)
+        self.assertEqual(self.run_hub("track", "alice/tpu", "--accelerator", "TpuV6E8").returncode, 0)
+        runs = {run["ref"]: run for run in self.snapshot()["activeRuns"]}
+        self.assertEqual(runs["alice/gpu"]["accelerator"], "GPU")
+        self.assertEqual(runs["alice/tpu"]["accelerator"], "TPU")
+        self.assertIsNone(runs["alice/plain"]["accelerator"])
+
+    def test_track_rejects_an_unknown_accelerator(self):
+        proc = self.run_hub("track", "alice/nb", "--accelerator", "abacus")
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.stdout, "")
+        self.assertRegex(proc.stderr, r"^kaggle-hub: Unknown accelerator: abacus\. [^\n]+\n$")
 
     def test_track_accepts_a_notebook_url(self):
         proc = self.run_hub("track", "https://www.kaggle.com/code/alice/nb")

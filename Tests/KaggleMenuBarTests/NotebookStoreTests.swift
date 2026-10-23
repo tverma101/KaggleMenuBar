@@ -235,6 +235,40 @@ final class NotebookStoreTests: XCTestCase {
         }
     }
 
+    func testFilteredHardwareLeavesTheMenuBarButNotThePanel() async {
+        let gpu = NotebookRun(ref: "demo/gpu", title: "GPU", status: .running, lastRunAt: Date(), accelerator: .gpu)
+        let cpu = NotebookRun(ref: "demo/cpu", title: "CPU", status: .queued, accelerator: .cpu)
+        let unknown = NotebookRun(ref: "demo/unknown", title: "Unknown", status: .queued)
+        await withStore([
+            .snapshot(ActivitySnapshot(activeRuns: [gpu, cpu, unknown], notebooksChecked: 3)),
+            .snapshot(ActivitySnapshot(activeRuns: [gpu, cpu], notebooksChecked: 3)),
+        ]) { store, _ in
+            await store.refresh()
+            store.setShowsInMenuBar(.cpu, false)
+            XCTAssertEqual(store.menuBarRuns.map(\.ref), ["demo/gpu", "demo/unknown"])
+            XCTAssertEqual(store.activeRuns.count, 3, "The panel still lists every run")
+            let model = StatusItemController.pillModel(for: store, now: Date())
+            XCTAssertEqual(model.indicators, [
+                .run(ref: "demo/gpu", status: .running, minutes: 0, accelerator: .gpu),
+                .run(ref: "demo/unknown", status: .queued, minutes: nil, accelerator: nil),
+            ])
+
+            // Runs whose hardware is unknown always show; with every known
+            // run filtered out, a successful check reads as idle.
+            store.setShowsInMenuBar(.gpu, false)
+            XCTAssertTrue(store.isStatusItemVisible)
+            await store.refresh()
+            XCTAssertTrue(store.menuBarRuns.isEmpty)
+            XCTAssertFalse(store.isStatusItemVisible)
+            store.setShowsInMenuBar(.gpu, true)
+            XCTAssertTrue(store.isStatusItemVisible)
+
+            let reopened = NotebookStore(cli: ScriptedKaggle([]), defaults: UserDefaults(suiteName: Self.suite)!,
+                                         startPolling: false, log: log)
+            XCTAssertEqual(reopened.hiddenAccelerators, [.cpu], "The choice survives a relaunch")
+        }
+    }
+
     func testIdleDemoUsesTheSameVisibilityRuleAsLiveSnapshots() {
         XCTAssertFalse(NotebookStore(demo: "idle").isStatusItemVisible)
         for scenario in ["queued", "running", "checking", "error", "disconnected"] {

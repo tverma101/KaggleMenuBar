@@ -127,6 +127,8 @@ struct KaggleCLI: KaggleActivityProviding {
                 let status: NotebookRunStatus
                 let lastRunAt: String?
                 let project: String?
+                /// Optional: hubs that predate it, or do not know, leave it out.
+                let accelerator: String?
             }
             let activeRuns: [Run]
             let notebooksChecked: Int
@@ -135,7 +137,8 @@ struct KaggleCLI: KaggleActivityProviding {
         let snapshot = try JSONDecoder().decode(SharedSnapshot.self, from: Data(output.utf8))
         return ActivitySnapshot(activeRuns: snapshot.activeRuns.map {
             NotebookRun(ref: $0.ref, title: $0.title, status: $0.status,
-                        lastRunAt: KaggleTimestamp.date(from: $0.lastRunAt), project: $0.project)
+                        lastRunAt: KaggleTimestamp.date(from: $0.lastRunAt), project: $0.project,
+                        accelerator: Accelerator(kaggleName: $0.accelerator))
         }, notebooksChecked: snapshot.notebooksChecked, unavailableCount: snapshot.unavailableCount ?? 0,
            source: .hub)
     }
