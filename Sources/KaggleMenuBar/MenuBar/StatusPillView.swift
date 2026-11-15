@@ -38,10 +38,9 @@ enum PillMetrics {
     static var markWidth: CGFloat { KaggleMark.width(forHeight: markHeight) }
 }
 
-/// The status item's drawing. It sits on top of the `NSStatusBarButton`,
-/// passes every click through to it, and right-aligns the capsule so the
-/// capsule stays still while the status item's length changes around it. The
-/// capsule keeps its colors on light and dark menu bars.
+/// The status item's drawing. The status item shows it as its button's image
+/// (`image(for:width:)`); the view draws the same pill for the rendering
+/// tests and gallery. The capsule keeps its colors on light and dark menu bars.
 @MainActor
 final class StatusPillView: NSView {
     private var model = PillModel()
@@ -80,6 +79,27 @@ final class StatusPillView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        Self.draw(model, in: context, bounds: bounds)
+    }
+
+    /// The pill as a status button image, right-aligned in `width` so the
+    /// capsule stays still while the item's length changes around it. The
+    /// button draws it, so macOS dims it with the rest of the menu bar on an
+    /// inactive display; a subview drawing the same pill stays bright there.
+    /// The handler redraws at each display's scale.
+    static func image(for model: PillModel, width: CGFloat) -> NSImage {
+        let size = NSSize(width: max(width, Self.width(for: model)), height: PillMetrics.height)
+        let image = NSImage(size: size, flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            draw(model, in: context, bounds: rect)
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = "Kaggle"
+        return image
+    }
+
+    private static func draw(_ model: PillModel, in context: CGContext, bounds: CGRect) {
         let layout = Layout(model)
         let midY = bounds.midY
         context.translateBy(x: floor(bounds.width - layout.width), y: floor(midY - PillMetrics.height / 2))
