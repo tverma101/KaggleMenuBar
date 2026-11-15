@@ -58,6 +58,30 @@ final class PillRenderingTests: XCTestCase {
         XCTAssertEqual(StatusPillView.width(for: Self.scenarios[6].model), StatusPillView.width(for: four))
     }
 
+    /// The status button draws the pill as its image, so macOS dims it on an
+    /// inactive display. It keeps its colors and stays right-aligned while the
+    /// item is wider than the pill during a shrink.
+    func testButtonImageKeepsColorsAndRightAlignsTheCapsule() throws {
+        let model = Self.scenarios[4].model
+        let width = StatusPillView.width(for: model)
+        let image = StatusPillView.image(for: model, width: width + 20)
+        XCTAssertFalse(image.isTemplate)
+        XCTAssertEqual(image.size, NSSize(width: width + 20, height: PillMetrics.height))
+        XCTAssertEqual(StatusPillView.image(for: model, width: 0).size.width, width)
+
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(width + 20), pixelsHigh: Int(PillMetrics.height),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        let midY = Int(PillMetrics.height / 2)
+        XCTAssertEqual(rep.colorAt(x: 5, y: midY)?.alphaComponent ?? 1, 0, accuracy: 0.01, "left gap stays clear")
+        XCTAssertEqual(rep.colorAt(x: Int(width + 20) - 11, y: midY)?.alphaComponent ?? 0, 1, accuracy: 0.01)
+    }
+
     func testCompactElapsedTimeReadsLikeAClock() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let cases: [(TimeInterval, String)] = [

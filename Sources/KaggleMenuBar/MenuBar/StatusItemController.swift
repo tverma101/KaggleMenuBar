@@ -10,7 +10,6 @@ final class StatusItemController: NSObject {
     private let logger = Logger(subsystem: "app.kernelwatch.KernelWatch", category: "MenuBar")
     private let store: NotebookStore
     private let statusItem: NSStatusItem
-    private let pillView = StatusPillView(frame: .zero)
     private lazy var panel: MenuBarPanel = {
         let panel = MenuBarPanel(content: StatusPopover(store: store, onOpen: { [weak self] url in
             NSWorkspace.shared.open(url)
@@ -40,16 +39,15 @@ final class StatusItemController: NSObject {
         // Builds that hid the item with `isVisible` left it saved as hidden.
         statusItem.isVisible = true
         if let button = statusItem.button {
-            button.image = nil
+            // The pill is the button's image, not a subview: macOS dims a
+            // button's image with the rest of the menu bar on an inactive
+            // display, but left a subview drawing the same pill bright.
             button.title = ""
-            button.imagePosition = .noImage
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleNone
             button.target = self
             button.action = #selector(togglePanel(_:))
             button.sendAction(on: [.leftMouseDown, .rightMouseDown])
-
-            pillView.frame = button.bounds
-            pillView.autoresizingMask = [.width, .height]
-            button.addSubview(pillView)
         }
 
         subscription = store.objectWillChange
@@ -120,8 +118,8 @@ final class StatusItemController: NSObject {
             statusItem.length = target
             syncPillFrame()
         }
-        pillView.apply(model, animated: animated)
         renderedModel = model
+        drawPill(animated: animated)
 
         if isShown, target < statusItem.length {
             let generation = shrinkGeneration
@@ -145,12 +143,11 @@ final class StatusItemController: NSObject {
         shrinkGeneration += 1
         if shown {
             statusItem.length = width
-            pillView.isHidden = false
             syncPillFrame()
         } else {
             // An open panel stays where it is, as it does when opened while
             // idle, so turning off the last shown hardware can be undone.
-            pillView.isHidden = true
+            statusItem.button?.image = nil
             statusItem.length = 0
         }
         announcePresence()
@@ -182,14 +179,21 @@ final class StatusItemController: NSObject {
         }
     }
 
+    /// Redraws the shown pill to fill the item's current length.
     private func syncPillFrame() {
-        guard let button = statusItem.button else { return }
-        button.layoutSubtreeIfNeeded()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        pillView.frame = button.bounds
-        pillView.layoutSubtreeIfNeeded()
-        CATransaction.commit()
+        drawPill(animated: false)
+    }
+
+    private func drawPill(animated: Bool) {
+        guard isShown, let model = renderedModel, let button = statusItem.button else { return }
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let layer = button.layer {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = PillMetrics.transitionDuration
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(fade, forKey: "contents")
+        }
+        button.image = StatusPillView.image(for: model, width: statusItem.length)
     }
 
     static func pillModel(for store: NotebookStore, now: Date) -> PillModel {
